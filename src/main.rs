@@ -16,6 +16,8 @@
 //! spectral serve               MCP server
 //! ```
 
+mod memory;
+
 use std::process;
 
 fn main() {
@@ -143,13 +145,13 @@ fn optic_cmd(op: &str, args: &[String]) {
     }
 }
 
-/// Memory subcommands — store, recall, crystallize, export, ingest.
+/// Memory subcommands — store, recall, crystallize, export, ingest, status.
 fn memory_cmd(args: &[String]) {
     if args.is_empty() {
         eprintln!("spectral memory — agent memory via lens");
         eprintln!();
         eprintln!("  spectral memory store <type> <content>");
-        eprintln!("  spectral memory recall <query> [--distance 0.5]");
+        eprintln!("  spectral memory recall <oid> [--distance 0.5]");
         eprintln!("  spectral memory crystallize <oid>");
         eprintln!("  spectral memory export [--dir .]");
         eprintln!("  spectral memory ingest [--dir .]");
@@ -158,41 +160,15 @@ fn memory_cmd(args: &[String]) {
     }
 
     match args[0].as_str() {
-        "status" => memory_status(),
+        "store" => memory::store(&args[1..]),
+        "recall" => memory::recall(&args[1..]),
+        "crystallize" => memory::crystallize(&args[1..]),
+        "export" => memory::export(&args[1..]),
+        "ingest" => memory::ingest(&args[1..]),
+        "status" => memory::status(),
         other => {
-            eprintln!("spectral memory {}: not yet wired (Task 3)", other);
+            eprintln!("spectral memory: unknown command '{}'", other);
             process::exit(1);
         }
     }
-}
-
-/// Memory status — open both graphs, report stats.
-fn memory_status() {
-    let home = dirs_or_home();
-    let user_db_path = format!("{}/.spectral", home);
-    let project_db_path = ".spectral";
-
-    eprintln!("spectral memory status");
-    eprintln!("  user graph:    {}", user_db_path);
-    eprintln!("  project graph: {}", project_db_path);
-
-    // Check if dirs exist
-    let user_exists = std::path::Path::new(&user_db_path).exists();
-    let project_exists = std::path::Path::new(project_db_path).exists();
-    eprintln!(
-        "  user:    {}",
-        if user_exists { "exists" } else { "not initialized" }
-    );
-    eprintln!(
-        "  project: {}",
-        if project_exists {
-            "exists"
-        } else {
-            "not initialized"
-        }
-    );
-}
-
-fn dirs_or_home() -> String {
-    std::env::var("HOME").unwrap_or_else(|_| ".".to_string())
 }
