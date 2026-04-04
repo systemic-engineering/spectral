@@ -1,0 +1,17 @@
+[package]
+name = "spectral"
+version = "0.1.0"
+edition = "2021"
+description = "jq for reality. One binary. Five operations. Everything settles."
+
+[[bin]]
+name = "spectral"
+path = "src/main.rs"
+
+[dependencies]
+mirror = { path = "../mirror" }
+lens = { path = "../lens" }
+prism = { path = "../prism" }
+spectral-db = { path = "../spectral-db" }
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
