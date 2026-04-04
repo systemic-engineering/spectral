@@ -82,13 +82,65 @@ fn delegate(binary: &str, args: &[String]) {
 }
 
 /// Five operations — fold, prism, traversal, lens, iso.
-/// Each is a spectral-db operation on the project graph.
+/// Each parses .mirror/.conv source into a content-addressed AST and prints the graph.
 fn optic_cmd(op: &str, args: &[String]) {
+    use mirror::parse::Parse;
+    use mirror::Vector;
+
     let path = args.first().map(|s| s.as_str()).unwrap_or(".");
 
-    eprintln!("spectral {} {}", op, path);
-    eprintln!("  (wiring to mirror abyss — Task 2)");
-    process::exit(1);
+    // If path is a file, parse it as .mirror grammar
+    let source = if std::path::Path::new(path).is_file() {
+        std::fs::read_to_string(path).unwrap_or_else(|e| {
+            eprintln!("spectral {}: {}: {}", op, path, e);
+            process::exit(1);
+        })
+    } else {
+        // Directory: scan for all .mirror/.conv files
+        eprintln!("spectral {} on directory: scanning {}", op, path);
+        let mut combined = String::new();
+        if let Ok(entries) = std::fs::read_dir(path) {
+            let mut paths: Vec<_> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    let p = e.path();
+                    p.extension()
+                        .and_then(|x| x.to_str())
+                        .map_or(false, |ext| ext == "mirror" || ext == "conv")
+                })
+                .collect();
+            paths.sort_by_key(|e| e.path());
+            for entry in paths {
+                if let Ok(s) = std::fs::read_to_string(entry.path()) {
+                    combined.push_str(&s);
+                    combined.push('\n');
+                }
+            }
+        }
+        combined
+    };
+
+    if source.is_empty() {
+        eprintln!("spectral {}: no .mirror or .conv files in {}", op, path);
+        process::exit(1);
+    }
+
+    // Parse
+    let ast = match Parse.trace(source).into_result() {
+        Ok(tree) => tree,
+        Err(e) => {
+            eprintln!("spectral {}: parse error: {}", op, e);
+            process::exit(1);
+        }
+    };
+
+    let node_count = ast.children().len();
+    eprintln!("spectral {}: {} nodes from {}", op, node_count, path);
+
+    // Print the graph as node list
+    for child in ast.children() {
+        println!("  {}:{}", child.data().name, child.data().value);
+    }
 }
 
 /// Memory subcommands — store, recall, crystallize, export, ingest.
