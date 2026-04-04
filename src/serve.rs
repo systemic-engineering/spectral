@@ -1,110 +1,428 @@
-//! spectral serve — MCP server scaffold.
+//! spectral serve — MCP JSON-RPC server over stdio.
 //!
 //! Holds a composed Lens over user + project spectral-db instances.
-//! Exposes memory operations as MCP tools.
+//! Exposes memory operations as MCP tools via the Model Context Protocol.
 //!
-//! This is the scaffold — prints tool definitions and reads stdin
-//! line-by-line. Full MCP JSON-RPC protocol in a follow-up task.
+//! Protocol: JSON-RPC 2.0, newline-delimited, stdin/stdout.
+//! Logs go to stderr.
 
-use std::io::BufRead;
+use std::io::{self, BufRead, Write};
+
+use lens::types::{Distance, NodeData, NodeType};
+use lens::Lens;
+use prism::Oid;
+use serde_json::{json, Value};
 
 use crate::memory;
 
-/// Start the MCP server.
+// ── Tool definitions ────────────────────────────────────────────────
+
+fn tool_definitions() -> Value {
+    json!([
+        {
+            "name": "memory_store",
+            "description": "Store a fact, observation, decision, or pattern in spectral memory",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "node_type": {
+                        "type": "string",
+                        "enum": ["fact", "observation", "decision", "pattern", "file", "function", "test"],
+                        "description": "The type of memory node"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The content to store"
+                    }
+                },
+                "required": ["node_type", "content"]
+            }
+        },
+        {
+            "name": "memory_recall",
+            "description": "Find memories near a given node by spectral proximity",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "oid": {
+                        "type": "string",
+                        "description": "OID of the node to search near"
+                    },
+                    "distance": {
+                        "type": "number",
+                        "description": "Maximum spectral distance (0.0-1.0)",
+                        "default": 0.5
+                    }
+                },
+                "required": ["oid"]
+            }
+        },
+        {
+            "name": "memory_crystallize",
+            "description": "Promote a memory node to crystallized procedural memory (survives pressure shedding)",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "oid": {
+                        "type": "string",
+                        "description": "OID of the node to crystallize"
+                    }
+                },
+                "required": ["oid"]
+            }
+        },
+        {
+            "name": "memory_status",
+            "description": "Get spectral memory status: node count, edge count, pressure",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    ])
+}
+
+// ── Resource definitions ────────────────────────────────────────────
+
+fn resource_definitions() -> Value {
+    json!([
+        {
+            "uri": "memory://context",
+            "name": "Memory Context",
+            "description": "Current spectral memory context for this project",
+            "mimeType": "text/plain"
+        },
+        {
+            "uri": "memory://status",
+            "name": "Memory Status",
+            "description": "Spectral memory graph statistics",
+            "mimeType": "text/plain"
+        }
+    ])
+}
+
+// ── JSON-RPC helpers ────────────────────────────────────────────────
+
+fn jsonrpc_result(id: &Value, result: Value) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": result
+    })
+}
+
+fn jsonrpc_error(id: &Value, code: i64, message: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": code,
+            "message": message
+        }
+    })
+}
+
+fn tool_result_text(text: &str) -> Value {
+    json!({
+        "content": [{
+            "type": "text",
+            "text": text
+        }]
+    })
+}
+
+fn tool_result_error(text: &str) -> Value {
+    json!({
+        "content": [{
+            "type": "text",
+            "text": text
+        }],
+        "isError": true
+    })
+}
+
+// ── Tool dispatch ───────────────────────────────────────────────────
+
+fn handle_memory_store(lens: &Lens, arguments: &Value) -> Value {
+    let node_type_str = match arguments.get("node_type").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => return tool_result_error("missing required argument: node_type"),
+    };
+    let content = match arguments.get("content").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => return tool_result_error("missing required argument: content"),
+    };
+
+    let node_type = NodeType::new_unchecked(node_type_str);
+    let data = NodeData::from_str(content);
+    let beam = lens.store(node_type, data);
+    lens.flush();
+
+    if beam.is_lossless() {
+        tool_result_text(&format!("stored: {}", beam.result))
+    } else {
+        let reason = match &beam.recovered {
+            Some(prism::Recovery::Failed { reason }) => reason.as_str(),
+            _ => "unknown error",
+        };
+        tool_result_error(&format!("store failed: {}", reason))
+    }
+}
+
+fn handle_memory_recall(lens: &Lens, arguments: &Value) -> Value {
+    let oid_str = match arguments.get("oid").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => return tool_result_error("missing required argument: oid"),
+    };
+    let distance = arguments
+        .get("distance")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.5);
+
+    let beam = lens.recall(Oid::new(oid_str), Distance::new(distance));
+    let oids = &beam.result;
+
+    if oids.is_empty() {
+        tool_result_text(&format!("no results within distance {}", distance))
+    } else {
+        let mut lines = Vec::new();
+        for oid in oids {
+            let read_beam = lens.read(oid.clone());
+            match read_beam.result {
+                Some(data) => {
+                    let text = String::from_utf8_lossy(data.as_bytes());
+                    lines.push(format!("{} {}", oid, text));
+                }
+                None => {
+                    lines.push(format!("{}", oid));
+                }
+            }
+        }
+        tool_result_text(&lines.join("\n"))
+    }
+}
+
+fn handle_memory_crystallize(lens: &Lens, arguments: &Value) -> Value {
+    let oid_str = match arguments.get("oid").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => return tool_result_error("missing required argument: oid"),
+    };
+
+    let beam = lens.crystallize(Oid::new(oid_str));
+    lens.flush();
+
+    if beam.is_lossless() {
+        tool_result_text(&format!("crystallized: {}", oid_str))
+    } else {
+        let reason = match &beam.recovered {
+            Some(prism::Recovery::Failed { reason }) => reason.as_str(),
+            _ => "unknown error",
+        };
+        tool_result_error(&format!("crystallize failed: {}", reason))
+    }
+}
+
+fn handle_memory_status(lens: &Lens) -> Value {
+    let (nodes, edges) = lens.graph_stats();
+    tool_result_text(&format!(
+        "nodes: {}\nedges: {}\npressure: 0.0",
+        nodes, edges
+    ))
+}
+
+// ── Resource dispatch ───────────────────────────────────────────────
+
+fn handle_resource_read(lens: &Lens, uri: &str) -> Value {
+    match uri {
+        "memory://context" => {
+            let (nodes, edges) = lens.graph_stats();
+            json!({
+                "contents": [{
+                    "uri": uri,
+                    "mimeType": "text/plain",
+                    "text": format!("spectral memory context\nnodes: {}\nedges: {}", nodes, edges)
+                }]
+            })
+        }
+        "memory://status" => {
+            let (nodes, edges) = lens.graph_stats();
+            json!({
+                "contents": [{
+                    "uri": uri,
+                    "mimeType": "text/plain",
+                    "text": format!("nodes: {}\nedges: {}\npressure: 0.0", nodes, edges)
+                }]
+            })
+        }
+        _ => json!({
+            "contents": [{
+                "uri": uri,
+                "mimeType": "text/plain",
+                "text": format!("unknown resource: {}", uri)
+            }]
+        }),
+    }
+}
+
+// ── Main dispatch loop ──────────────────────────────────────────────
+
+fn dispatch(msg: &Value, lens: &Lens) -> Option<Value> {
+    let method = msg.get("method")?.as_str()?;
+    let id = msg.get("id");
+
+    // Notifications have no id — don't respond
+    let is_notification = id.is_none();
+
+    match method {
+        "initialize" => {
+            let id = id?;
+            Some(jsonrpc_result(
+                id,
+                json!({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {
+                        "tools": {},
+                        "resources": {}
+                    },
+                    "serverInfo": {
+                        "name": "spectral",
+                        "version": "0.1.0"
+                    }
+                }),
+            ))
+        }
+
+        "notifications/initialized" => {
+            eprintln!("spectral serve: client initialized");
+            None // notification — no response
+        }
+
+        "tools/list" => {
+            let id = id?;
+            Some(jsonrpc_result(id, json!({ "tools": tool_definitions() })))
+        }
+
+        "tools/call" => {
+            let id = id?;
+            let empty = json!({});
+            let params = msg.get("params").unwrap_or(&empty);
+            let tool_name = params.get("name").and_then(|v| v.as_str());
+            let empty_args = json!({});
+            let arguments = params.get("arguments").unwrap_or(&empty_args);
+
+            let result = match tool_name {
+                Some("memory_store") => handle_memory_store(lens, arguments),
+                Some("memory_recall") => handle_memory_recall(lens, arguments),
+                Some("memory_crystallize") => handle_memory_crystallize(lens, arguments),
+                Some("memory_status") => handle_memory_status(lens),
+                Some(name) => tool_result_error(&format!("unknown tool: {}", name)),
+                None => tool_result_error("missing tool name"),
+            };
+
+            Some(jsonrpc_result(id, result))
+        }
+
+        "resources/list" => {
+            let id = id?;
+            Some(jsonrpc_result(
+                id,
+                json!({ "resources": resource_definitions() }),
+            ))
+        }
+
+        "resources/read" => {
+            let id = id?;
+            let empty_params = json!({});
+            let params = msg.get("params").unwrap_or(&empty_params);
+            let uri = params.get("uri").and_then(|v| v.as_str()).unwrap_or("");
+            Some(jsonrpc_result(id, handle_resource_read(lens, uri)))
+        }
+
+        _ => {
+            if is_notification {
+                eprintln!("spectral serve: ignoring notification '{}'", method);
+                None
+            } else {
+                let id = id?;
+                Some(jsonrpc_error(id, -32601, &format!("method not found: {}", method)))
+            }
+        }
+    }
+}
+
+/// Start the MCP server — JSON-RPC over stdio.
 pub fn serve(project_path: &str) {
     eprintln!("spectral serve: starting MCP server");
     eprintln!("  project: {}", project_path);
 
-    // Open lenses
+    // Open lenses once — held for the lifetime of the server
     let user_lens = memory::open_user_lens();
     let project_lens = memory::open_project_lens(project_path);
 
-    if user_lens.is_none() && project_lens.is_none() {
-        eprintln!("spectral serve: no graphs available");
-        std::process::exit(1);
-    }
-
-    eprintln!(
-        "  user lens:    {}",
-        if user_lens.is_some() { "active" } else { "none" }
-    );
-    eprintln!(
-        "  project lens: {}",
-        if project_lens.is_some() {
-            "active"
-        } else {
-            "none"
+    // Prefer project lens, fall back to user lens
+    let lens = match (project_lens, user_lens) {
+        (Some(pl), _) => pl,
+        (None, Some(ul)) => ul,
+        (None, None) => {
+            eprintln!("spectral serve: no graphs available");
+            std::process::exit(1);
         }
+    };
+
+    let (nodes, edges) = lens.graph_stats();
+    eprintln!(
+        "  graph: {} nodes, {} edges",
+        nodes, edges
     );
-
-    // MCP tool definitions
-    let tools = serde_json::json!({
-        "tools": [
-            {
-                "name": "memory_store",
-                "description": "Store a fact, observation, or pattern in spectral memory",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "node_type": {
-                            "type": "string",
-                            "enum": ["fact", "observation", "decision", "pattern"]
-                        },
-                        "content": { "type": "string" }
-                    },
-                    "required": ["node_type", "content"]
-                }
-            },
-            {
-                "name": "memory_recall",
-                "description": "Recall memories spectrally near a given node",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "oid": { "type": "string" },
-                        "distance": { "type": "number", "default": 0.5 }
-                    },
-                    "required": ["oid"]
-                }
-            },
-            {
-                "name": "memory_crystallize",
-                "description": "Promote a memory to crystallized procedural memory (survives pressure)",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "oid": { "type": "string" }
-                    },
-                    "required": ["oid"]
-                }
-            },
-            {
-                "name": "memory_status",
-                "description": "Get memory status: node count, pressure, crystals",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {}
-                }
-            }
-        ]
-    });
-
-    let tools_json = serde_json::to_string_pretty(&tools).unwrap();
-    eprintln!("  tools: {}", tools_json);
     eprintln!("  MCP server ready (stdio)");
-    eprintln!("  (full MCP JSON-RPC loop: next iteration)");
 
-    // JSON-RPC stub — read stdin line-by-line
-    let stdin = std::io::stdin();
-    loop {
-        let mut line = String::new();
-        match stdin.lock().read_line(&mut line) {
-            Ok(0) => break, // EOF
-            Ok(_) => {
-                let _trimmed = line.trim();
-                // TODO: parse JSON-RPC and dispatch to lens operations
+    // JSON-RPC loop: read one JSON object per line from stdin
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+
+    for line in stdin.lock().lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("spectral serve: stdin read error: {}", e);
+                break;
             }
-            Err(_) => break,
+        };
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Parse JSON-RPC message
+        let msg: Value = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("spectral serve: malformed JSON: {} — line: {}", e, trimmed);
+                continue;
+            }
+        };
+
+        // Dispatch and respond
+        if let Some(response) = dispatch(&msg, &lens) {
+            match serde_json::to_string(&response) {
+                Ok(json_str) => {
+                    if let Err(e) = writeln!(stdout, "{}", json_str) {
+                        eprintln!("spectral serve: stdout write error: {}", e);
+                        break;
+                    }
+                    if let Err(e) = stdout.flush() {
+                        eprintln!("spectral serve: stdout flush error: {}", e);
+                        break;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("spectral serve: JSON serialize error: {}", e);
+                }
+            }
         }
     }
+
+    eprintln!("spectral serve: shutting down");
 }
