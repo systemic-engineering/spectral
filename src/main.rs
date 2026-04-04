@@ -17,6 +17,7 @@
 //! ```
 
 mod memory;
+mod serve;
 
 use std::process;
 
@@ -58,8 +59,13 @@ fn main() {
 
         // MCP server
         "serve" => {
-            eprintln!("spectral serve: not yet wired (Task 4)");
-            process::exit(1);
+            let project = args
+                .iter()
+                .position(|a| a == "--project")
+                .and_then(|i| args.get(i + 1))
+                .map(|s| s.as_str())
+                .unwrap_or(".");
+            serve::serve(project);
         }
 
         other => {
