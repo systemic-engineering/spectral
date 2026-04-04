@@ -2,43 +2,121 @@
 //!
 //! Holds a composed Lens over user + project spectral-db instances.
 //! Exposes memory operations as MCP tools via the Model Context Protocol.
+//! Grammar-driven: scans project directory for .conv files and generates
+//! MCP tools from grammar actions.
 //!
 //! Protocol: JSON-RPC 2.0, newline-delimited, stdin/stdout.
 //! Logs go to stderr.
 
 use std::io::{self, BufRead, Write};
+use std::path::Path;
 
 use lens::types::{Distance, NodeData, NodeType};
 use lens::Lens;
+use mirror::parse::Parse;
+use mirror::Vector;
 use prism::Oid;
 use serde_json::{json, Value};
 
 use crate::memory;
 
+// ── Grammar scanning ──────────────────────────────────────────────
+
+/// An action extracted from a .conv grammar file.
+struct GrammarAction {
+    grammar_name: String, // "reed" (no @)
+    action_name: String,  // "observe"
+}
+
+/// Scan a project directory for .conv files and extract grammar actions.
+fn scan_grammars(project_path: &str) -> Vec<GrammarAction> {
+    let mut actions = Vec::new();
+    let mut conv_files = Vec::new();
+
+    let project = Path::new(project_path);
+
+    // Check project root for .conv files
+    if let Ok(entries) = std::fs::read_dir(project) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("conv") {
+                conv_files.push(path);
+            }
+        }
+    }
+
+    // Check conv/ subdirectory
+    let conv_dir = project.join("conv");
+    if conv_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&conv_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("conv") {
+                    conv_files.push(path);
+                }
+            }
+        }
+    }
+
+    conv_files.sort();
+
+    for path in &conv_files {
+        let source = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!(
+                    "spectral serve: failed to read {}: {}",
+                    path.display(),
+                    e
+                );
+                continue;
+            }
+        };
+
+        let ast = match Parse.trace(source).into_result() {
+            Ok(tree) => tree,
+            Err(e) => {
+                eprintln!(
+                    "spectral serve: parse error in {}: {}",
+                    path.display(),
+                    e
+                );
+                continue;
+            }
+        };
+
+        for child in ast.children() {
+            if child.data().is_decl("grammar") {
+                let raw_name = &child.data().value;
+                let grammar_name = raw_name.strip_prefix('@').unwrap_or(raw_name).to_string();
+
+                for grammar_child in child.children() {
+                    if grammar_child.data().name == "action-def" {
+                        let action_name = grammar_child.data().value.clone();
+                        actions.push(GrammarAction {
+                            grammar_name: grammar_name.clone(),
+                            action_name,
+                        });
+                    }
+                }
+            }
+        }
+
+        eprintln!(
+            "spectral serve: loaded {}",
+            path.display()
+        );
+    }
+
+    actions
+}
+
 // ── Tool definitions ────────────────────────────────────────────────
 
-fn tool_definitions() -> Value {
-    json!([
-        {
-            "name": "memory_store",
-            "description": "Store a fact, observation, decision, or pattern in spectral memory",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "node_type": {
-                        "type": "string",
-                        "enum": ["fact", "observation", "decision", "pattern", "file", "function", "test"],
-                        "description": "The type of memory node"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "The content to store"
-                    }
-                },
-                "required": ["node_type", "content"]
-            }
-        },
-        {
+/// Built-in tools that are always available regardless of grammars.
+fn builtin_tool_definitions() -> Vec<Value> {
+    vec![
+        json!({
             "name": "memory_recall",
             "description": "Find memories near a given node by spectral proximity",
             "inputSchema": {
@@ -56,8 +134,8 @@ fn tool_definitions() -> Value {
                 },
                 "required": ["oid"]
             }
-        },
-        {
+        }),
+        json!({
             "name": "memory_crystallize",
             "description": "Promote a memory node to crystallized procedural memory (survives pressure shedding)",
             "inputSchema": {
@@ -70,16 +148,48 @@ fn tool_definitions() -> Value {
                 },
                 "required": ["oid"]
             }
-        },
-        {
+        }),
+        json!({
             "name": "memory_status",
             "description": "Get spectral memory status: node count, edge count, pressure",
             "inputSchema": {
                 "type": "object",
                 "properties": {}
             }
-        }
-    ])
+        }),
+    ]
+}
+
+/// Generate tool definitions from parsed grammar actions.
+fn grammar_tool_definitions(actions: &[GrammarAction]) -> Vec<Value> {
+    actions
+        .iter()
+        .map(|action| {
+            let tool_name = format!("{}__{}", action.grammar_name, action.action_name);
+            let description = format!("{} in @{}", action.action_name, action.grammar_name);
+            json!({
+                "name": tool_name,
+                "description": description,
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "content": {
+                            "type": "string",
+                            "description": "Content for this action"
+                        }
+                    },
+                    "required": ["content"]
+                }
+            })
+        })
+        .collect()
+}
+
+/// All tool definitions: grammar-derived + built-in.
+fn tool_definitions(actions: &[GrammarAction]) -> Value {
+    let mut tools = grammar_tool_definitions(actions);
+    tools.extend(builtin_tool_definitions());
+    Value::Array(tools)
 }
 
 // ── Resource definitions ────────────────────────────────────────────
@@ -143,23 +253,20 @@ fn tool_result_error(text: &str) -> Value {
 
 // ── Tool dispatch ───────────────────────────────────────────────────
 
-fn handle_memory_store(lens: &Lens, arguments: &Value) -> Value {
-    let node_type_str = match arguments.get("node_type").and_then(|v| v.as_str()) {
-        Some(s) => s,
-        None => return tool_result_error("missing required argument: node_type"),
-    };
+/// Handle a grammar-derived action: store content with the action name as node type.
+fn handle_grammar_action(lens: &Lens, action_name: &str, arguments: &Value) -> Value {
     let content = match arguments.get("content").and_then(|v| v.as_str()) {
         Some(s) => s,
         None => return tool_result_error("missing required argument: content"),
     };
 
-    let node_type = NodeType::new_unchecked(node_type_str);
+    let node_type = NodeType::new_unchecked(action_name);
     let data = NodeData::from_str(content);
     let beam = lens.store(node_type, data);
     lens.flush();
 
     if beam.is_lossless() {
-        tool_result_text(&format!("stored: {}", beam.result))
+        tool_result_text(&format!("stored as {}: {}", action_name, beam.result))
     } else {
         let reason = match &beam.recovered {
             Some(prism::Recovery::Failed { reason }) => reason.as_str(),
@@ -266,7 +373,7 @@ fn handle_resource_read(lens: &Lens, uri: &str) -> Value {
 
 // ── Main dispatch loop ──────────────────────────────────────────────
 
-fn dispatch(msg: &Value, lens: &Lens) -> Option<Value> {
+fn dispatch(msg: &Value, lens: &Lens, actions: &[GrammarAction]) -> Option<Value> {
     let method = msg.get("method")?.as_str()?;
     let id = msg.get("id");
 
@@ -299,7 +406,10 @@ fn dispatch(msg: &Value, lens: &Lens) -> Option<Value> {
 
         "tools/list" => {
             let id = id?;
-            Some(jsonrpc_result(id, json!({ "tools": tool_definitions() })))
+            Some(jsonrpc_result(
+                id,
+                json!({ "tools": tool_definitions(actions) }),
+            ))
         }
 
         "tools/call" => {
@@ -311,10 +421,14 @@ fn dispatch(msg: &Value, lens: &Lens) -> Option<Value> {
             let arguments = params.get("arguments").unwrap_or(&empty_args);
 
             let result = match tool_name {
-                Some("memory_store") => handle_memory_store(lens, arguments),
                 Some("memory_recall") => handle_memory_recall(lens, arguments),
                 Some("memory_crystallize") => handle_memory_crystallize(lens, arguments),
                 Some("memory_status") => handle_memory_status(lens),
+                Some(name) if name.contains("__") => {
+                    let parts: Vec<&str> = name.splitn(2, "__").collect();
+                    let action = parts[1];
+                    handle_grammar_action(lens, action, arguments)
+                }
                 Some(name) => tool_result_error(&format!("unknown tool: {}", name)),
                 None => tool_result_error("missing tool name"),
             };
@@ -354,6 +468,19 @@ fn dispatch(msg: &Value, lens: &Lens) -> Option<Value> {
 pub fn serve(project_path: &str) {
     eprintln!("spectral serve: starting MCP server");
     eprintln!("  project: {}", project_path);
+
+    // Scan for .conv grammars and extract actions
+    let actions = scan_grammars(project_path);
+    eprintln!(
+        "  grammars: {} actions from .conv files",
+        actions.len()
+    );
+    for action in &actions {
+        eprintln!(
+            "    {}__{}: {} in @{}",
+            action.grammar_name, action.action_name, action.action_name, action.grammar_name
+        );
+    }
 
     // Open lenses once — held for the lifetime of the server
     let user_lens = memory::open_user_lens();
@@ -405,7 +532,7 @@ pub fn serve(project_path: &str) {
         };
 
         // Dispatch and respond
-        if let Some(response) = dispatch(&msg, &lens) {
+        if let Some(response) = dispatch(&msg, &lens, &actions) {
             match serde_json::to_string(&response) {
                 Ok(json_str) => {
                     if let Err(e) = writeln!(stdout, "{}", json_str) {
