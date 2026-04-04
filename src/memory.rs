@@ -79,6 +79,7 @@ pub fn store(args: &[String]) {
     let node_type = NodeType::new_unchecked(type_name);
     let data = NodeData::from_str(&content);
     let beam = lens.store(node_type, data);
+    lens.flush();
 
     if beam.is_lossless() {
         println!("{}", beam.result);
@@ -147,6 +148,7 @@ pub fn crystallize(args: &[String]) {
     });
 
     let beam = lens.crystallize(Oid::new(oid));
+    lens.flush();
     if beam.is_lossless() {
         eprintln!("crystallized: {}", oid);
     } else {
@@ -232,6 +234,7 @@ pub fn ingest(args: &[String]) {
     });
 
     let beam = lens.ingest_from(Path::new(dir));
+    lens.flush();
     let count = beam.result.len();
     if beam.is_lossless() {
         eprintln!("ingested {} nodes from {}", count, dir);
