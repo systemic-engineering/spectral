@@ -482,17 +482,36 @@ pub fn serve(project_path: &str) {
         );
     }
 
-    // Open lenses once — held for the lifetime of the server
-    let user_lens = memory::open_user_lens();
-    let project_lens = memory::open_project_lens(project_path);
+    // Build grammar filter from scanned actions — the .conv file defines the allowed types
+    let mut filter = lens::filter::GrammarFilter::new("spectral");
+    // Add action names as allowed types
+    for action in &actions {
+        filter = filter.allow_type(&action.action_name);
+    }
+    // Also allow the base types from the hardcoded filters
+    for base_type in &["file", "function", "decision", "observation", "test", "pattern",
+                        "preference", "feedback", "reference", "fact"] {
+        filter = filter.allow_type(base_type);
+    }
+    eprintln!("  filter: {} allowed types", filter.allowed_types().len());
 
-    // Prefer project lens, fall back to user lens
-    let lens = match (project_lens, user_lens) {
-        (Some(pl), _) => pl,
-        (None, Some(ul)) => ul,
-        (None, None) => {
-            eprintln!("spectral serve: no graphs available");
-            std::process::exit(1);
+    // Open lens with the grammar-derived filter
+    let db_path = std::path::Path::new(project_path).join(".spectral");
+    if !db_path.exists() {
+        std::fs::create_dir_all(&db_path).ok();
+    }
+    let lens = match Lens::open(&db_path, filter, "spectral-serve", 1e-6, 50_000_000) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("spectral serve: failed to open lens: {}", e);
+            // Fall back to user lens
+            match memory::open_user_lens() {
+                Some(l) => l,
+                None => {
+                    eprintln!("spectral serve: no graphs available");
+                    std::process::exit(1);
+                }
+            }
         }
     };
 
