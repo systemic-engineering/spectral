@@ -26,7 +26,7 @@ pub fn open_user_lens() -> Option<Lens> {
     }
 
     let filter = user_filter();
-    Lens::open(db_path, filter, "user", 1e-6, 50_000_000).ok()
+    Lens::open(db_path, filter, "user", 1e-6, 50_000_000).ok() // TODO: make configurable via .spec
 }
 
 /// Open the project lens (./.spectral/ relative to project_path).
@@ -39,7 +39,7 @@ pub fn open_project_lens(project_path: &str) -> Option<Lens> {
     }
 
     let filter = project_filter();
-    Lens::open(db_path, filter, "project", 1e-6, 50_000_000).ok()
+    Lens::open(db_path, filter, "project", 1e-6, 50_000_000).ok() // TODO: make configurable via .spec
 }
 
 fn user_filter() -> GrammarFilter {

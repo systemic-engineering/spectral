@@ -500,7 +500,7 @@ pub fn serve(project_path: &str) {
     if !db_path.exists() {
         std::fs::create_dir_all(&db_path).ok();
     }
-    let lens = match Lens::open(&db_path, filter, "spectral-serve", 1e-6, 50_000_000) {
+    let lens = match Lens::open(&db_path, filter, "spectral-serve", 1e-6, 50_000_000) { // TODO: make configurable via .spec
         Ok(l) => l,
         Err(e) => {
             eprintln!("spectral serve: failed to open lens: {}", e);
