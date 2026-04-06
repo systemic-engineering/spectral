@@ -23,6 +23,7 @@
 //! spectral serve               MCP server
 //! ```
 
+mod diff;
 mod memory;
 mod refs;
 mod serve;
@@ -85,8 +86,18 @@ fn main() {
             process::exit(1);
         }
 
-        // Navigation commands — not yet implemented
-        "diff" | "log" | "blame" => {
+        // Navigation commands
+        "diff" => {
+            if args.len() < 4 {
+                eprintln!("usage: spectral diff <ref-a> <ref-b>");
+                process::exit(1);
+            }
+            // For now, print stub — full integration with session state comes later
+            eprintln!("spectral diff {} {}", args[2], args[3]);
+            eprintln!("  (full diff requires session state — run spectral init first)");
+        }
+
+        "log" | "blame" => {
             eprintln!("spectral {}: not yet implemented", args[1]);
             process::exit(1);
         }
