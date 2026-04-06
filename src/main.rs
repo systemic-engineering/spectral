@@ -1,17 +1,24 @@
-//! spectral — jq for reality.
+//! spectral — git for graphs.
 //!
 //! One binary. Five operations. Everything settles.
 //!
 //! ```
-//! spectral fold .              observe any structure
-//! spectral prism .             filter by what matters
-//! spectral traversal .         explore what's connected
-//! spectral lens .              transform one thing
-//! spectral iso .               settle. done. crystal.
+//! spectral focus .             observe any structure
+//! spectral project .           filter by what matters
+//! spectral split .             explore what's connected
+//! spectral zoom .              transform one thing
+//! spectral refract .           settle. done. crystal.
+//!
+//! spectral init                start a spectral session
+//! spectral tick                advance the clock
+//! spectral tock                settle the graph
+//! spectral shatter             break apart a composite
+//!
+//! spectral diff                compare two states
+//! spectral log                 show tick history
+//! spectral blame               trace a node's lineage
 //!
 //! spectral mirror <cmd>        compiler operations
-//! spectral conversation <cmd>  runtime operations
-//! spectral db <cmd>            spectral-db operations
 //! spectral memory <cmd>        lens memory operations
 //! spectral serve               MCP server
 //! ```
@@ -25,34 +32,53 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("spectral — jq for reality");
+        eprintln!("spectral — git for graphs");
         eprintln!();
         eprintln!("five operations:");
-        eprintln!("  spectral fold <path>         observe any structure");
-        eprintln!("  spectral prism <path>        filter by what matters");
-        eprintln!("  spectral traversal <path>    explore what's connected");
-        eprintln!("  spectral lens <path>         transform one thing");
-        eprintln!("  spectral iso <path>          settle. done. crystal.");
+        eprintln!("  spectral focus <path>        observe any structure");
+        eprintln!("  spectral project <path>      filter by what matters");
+        eprintln!("  spectral split <path>        explore what's connected");
+        eprintln!("  spectral zoom <path>         transform one thing");
+        eprintln!("  spectral refract <path>      settle. done. crystal.");
+        eprintln!();
+        eprintln!("session:");
+        eprintln!("  spectral init                start a spectral session");
+        eprintln!("  spectral tick                advance the clock");
+        eprintln!("  spectral tock                settle the graph");
+        eprintln!("  spectral shatter             break apart a composite");
+        eprintln!();
+        eprintln!("navigation:");
+        eprintln!("  spectral diff                compare two states");
+        eprintln!("  spectral log                 show tick history");
+        eprintln!("  spectral blame               trace a node's lineage");
         eprintln!();
         eprintln!("tools:");
         eprintln!("  spectral mirror <cmd>        compiler");
-        eprintln!("  spectral conversation <cmd>  runtime");
-        eprintln!("  spectral db <cmd>            graph database");
         eprintln!("  spectral memory <cmd>        agent memory");
         eprintln!("  spectral serve [--project .]  MCP server");
         process::exit(1);
     }
 
     match args[1].as_str() {
-        // Five operations — delegate to mirror's abyss
-        "fold" | "prism" | "traversal" | "lens" | "iso" => {
+        // Five operations
+        "focus" | "project" | "split" | "zoom" | "refract" => {
             optic_cmd(&args[1], &args[2..]);
+        }
+
+        // Session commands — not yet implemented
+        "init" | "tick" | "tock" | "shatter" => {
+            eprintln!("spectral {}: not yet implemented", args[1]);
+            process::exit(1);
+        }
+
+        // Navigation commands — not yet implemented
+        "diff" | "log" | "blame" => {
+            eprintln!("spectral {}: not yet implemented", args[1]);
+            process::exit(1);
         }
 
         // Tool subcommands — delegate to binaries
         "mirror" => delegate("mirror", &args[2..]),
-        "conversation" => delegate("conversation", &args[2..]),
-        "db" => delegate("spectral-db", &args[2..]),
 
         // Memory — lens CLI
         "memory" => memory_cmd(&args[2..]),
@@ -89,7 +115,7 @@ fn delegate(binary: &str, args: &[String]) {
     }
 }
 
-/// Five operations — fold, prism, traversal, lens, iso.
+/// Five operations — focus, project, split, zoom, refract.
 /// Each parses .mirror/.conv source into a content-addressed AST and prints the graph.
 fn optic_cmd(op: &str, args: &[String]) {
     use mirror::parse::Parse;
