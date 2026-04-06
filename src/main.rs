@@ -24,6 +24,7 @@
 //! ```
 
 mod memory;
+mod refs;
 mod serve;
 mod session;
 
