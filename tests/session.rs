@@ -92,6 +92,20 @@ fn init_prints_seed_message() {
 }
 
 #[test]
+fn log_after_init_shows_entry() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path().to_str().unwrap();
+    spectral_in(dir, &["init"]);
+    let (_, stderr, code) = spectral_in(dir, &["log"]);
+    assert_eq!(code, 0, "log should succeed, stderr: {}", stderr);
+    assert!(
+        stderr.contains("init") || stderr.contains("Garden"),
+        "log should show init entry, got: {}",
+        stderr
+    );
+}
+
+#[test]
 fn init_twice_is_idempotent() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().to_str().unwrap();

@@ -24,6 +24,7 @@
 //! ```
 
 mod diff;
+mod log;
 mod memory;
 mod refs;
 mod serve;
