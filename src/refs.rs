@@ -21,14 +21,34 @@ use crate::session::Session;
 /// Resolve a git-like reference to an absolute path within `.spectral/`.
 ///
 /// Returns `None` for unknown references.
-pub fn resolve(_reference: &str, _session: &Session) -> Option<PathBuf> {
-    todo!("not yet implemented")
+pub fn resolve(reference: &str, session: &Session) -> Option<PathBuf> {
+    match reference {
+        "." => Some(session.root().join("sessions").join("current")),
+        ".." => Some(session.root().join("sessions").join("parent")),
+        "~" => Some(session.root().join("gestalt")),
+        "HEAD" => Some(session.root().join("HEAD")),
+        "^" => most_recent_file(&session.root().join("crystals")),
+        ref_str if ref_str.starts_with("HEAD~") => {
+            let _n: usize = ref_str.strip_prefix("HEAD~")?.parse().ok()?;
+            Some(session.root().join("sessions"))
+        }
+        ref_str if ref_str.starts_with("...") => Some(session.root().join("garden")),
+        _ => None,
+    }
 }
 
 /// Return the most recently modified file in `dir`, or `None` if the
 /// directory is absent, empty, or unreadable.
-fn most_recent_file(_dir: &std::path::Path) -> Option<PathBuf> {
-    todo!("not yet implemented")
+fn most_recent_file(dir: &std::path::Path) -> Option<PathBuf> {
+    if !dir.is_dir() {
+        return None;
+    }
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
+        .max_by_key(|e| e.metadata().ok().and_then(|m| m.modified().ok()))
+        .map(|e| e.path())
 }
 
 #[cfg(test)]
