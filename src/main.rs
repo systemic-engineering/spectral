@@ -98,8 +98,23 @@ fn main() {
             eprintln!("  (full diff requires session state — run spectral init first)");
         }
 
-        "log" | "blame" => {
-            eprintln!("spectral {}: not yet implemented", args[1]);
+        "log" => {
+            let oneline = args.iter().any(|a| a == "--oneline");
+            match session::Session::find(Path::new(".")) {
+                Some(session) => {
+                    let entries = log::read_log(&session);
+                    let output = log::format_log(&entries, oneline);
+                    eprint!("{}", output);
+                }
+                None => {
+                    eprintln!("spectral log: no .spectral directory found (run spectral init)");
+                    process::exit(1);
+                }
+            }
+        }
+
+        "blame" => {
+            eprintln!("spectral blame: not yet implemented");
             process::exit(1);
         }
 
