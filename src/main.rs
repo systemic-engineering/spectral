@@ -25,7 +25,9 @@
 
 mod memory;
 mod serve;
+mod session;
 
+use std::path::Path;
 use std::process;
 
 fn main() {
@@ -65,8 +67,19 @@ fn main() {
             optic_cmd(&args[1], &args[2..]);
         }
 
+        // Session commands
+        "init" => {
+            match session::Session::init(Path::new(".")) {
+                Ok(_) => process::exit(0),
+                Err(e) => {
+                    eprintln!("spectral init: {}", e);
+                    process::exit(1);
+                }
+            }
+        }
+
         // Session commands — not yet implemented
-        "init" | "tick" | "tock" | "shatter" => {
+        "tick" | "tock" | "shatter" => {
             eprintln!("spectral {}: not yet implemented", args[1]);
             process::exit(1);
         }
