@@ -5,93 +5,75 @@ spectral-db's shape.
 
 ---
 
-## Tick 1: Mirror Delivers
+## Tick 1: Mirror Delivers ✅
 
-### 1.1 Merge branches to main
+Complete. Branch `glint/tick-1-mirror-delivers`.
 
-Floating branches in mirror:
-- `glint/parse-store` — Store trait, parse re-export
-- `glint/mirror-optic` — MirrorOptic, DeclKind::Recover/Rescue, parser fixes
-- `mara/mirror-loss-bundle-update` — MirrorLoss, bundle tower, declaration.rs
-- `mara/action-prism` — action parsing, boot reorder, OpticOp, abstract grammars
-- `mara/materialize-crystal` — mirror.shatter, emit_shatter, crystal CLI command
-- `mara/optic-op-kernel` — operator → optic mapping
-
-Merge order follows dependency:
-1. `mara/mirror-loss-bundle-update` (MirrorLoss is foundation)
-2. `mara/action-prism` (action parsing builds on MirrorLoss)
-3. `mara/materialize-crystal` (crystal needs action parsing)
-4. `mara/optic-op-kernel` (OpticOp needs the parser)
-5. `glint/parse-store` (Store + parse re-export)
-6. `glint/mirror-optic` (MirrorOptic needs everything above)
-
-Resolve conflicts. Run tests after each merge. Green before next.
-
-### 1.2 Cli struct
-
-New file: `mirror/src/cli.rs`
-
-```rust
-pub struct Cli {
-    pub store: MirrorStore,
-    pub runtime: MirrorRuntime,
-    crystal_oid: MirrorHash,
-}
-
-impl Cli {
-    pub fn open(spec_path: &str) -> Imperfect<Self, CliError, MirrorLoss>;
-    pub fn dispatch(&self, command: &str, args: &[String])
-        -> Imperfect<String, CliError, MirrorLoss>;
-    pub fn crystal_oid(&self) -> &MirrorHash;
-}
-```
-
-### 1.3 main.rs → five-line shell
-
-```rust
-fn main() {
-    let cli = Cli::open("spec.mirror").unwrap_or_default();
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let result = cli.dispatch(&args[0], &args[1..]);
-    std::process::exit(match result {
-        Success(_) => 0,
-        Partial(_, _) => 0,
-        Failure(_, _) => 1,
-    });
-}
-```
-
-### 1.4 crystal --oid
-
-```bash
-mirror crystal --oid
-# prints the OID of the loaded crystal
-```
-
-### 1.5 The meta-property test
-
-```rust
-#[test]
-fn binary_is_its_own_spec() {
-    let running_oid = Cli::open("spec.mirror").crystal_oid();
-    let compiled_oid = MirrorRuntime::new()
-        .compile_boot_dir(&boot_dir(), &temp)
-        .collapsed.crystal();
-    assert_eq!(running_oid, compiled_oid);
-}
-```
-
-### 1.6 Done when
-
-- `mirror compile boot/00-prism.mirror` → exit 0, prints OID
-- `mirror crystal --oid` → prints hex hash
-- `mirror crystal output.shatter` → produces round-trippable file
-- The meta-property test passes
-- All 21 CLI e2e tests pass (19 green + 2 ignored → all green)
+- All six feature branches merged (339 tests)
+- Cli struct: `Cli::open()`, `Cli::dispatch()`, `Cli::crystal_oid()`
+- main.rs → thin shell
+- `mirror crystal --oid` prints loaded crystal hash
+- Meta-property test passes (same spec → same OID)
+- 20 CLI e2e tests passing, 2 ignored contracts
 
 ---
 
 ## Tick 2: Spectral Consumes
+
+### 2.0 MirrorOid<H: HashAlg = CoincidenceHash>
+
+The foundation type. Before anything else.
+
+```rust
+pub struct MirrorOid<H: HashAlg = CoincidenceHash>(Oid<H>);
+```
+
+Default is coincidence. Always. You never write the parameter unless
+you're crossing a boundary.
+
+```rust
+MirrorOid                    // CoincidenceHash. Home.
+MirrorOid<SHA1>              // git. Visiting.
+```
+
+The Shard:
+
+```rust
+pub struct Shard<V, H: HashAlg = CoincidenceHash> {
+    value: V,
+    oid: MirrorOid<H>,
+}
+```
+
+Foreign keys via GAT:
+
+```rust
+pub trait ForeignKey {
+    type Target<F: HashAlg>: ContentAddressed<F>;
+    fn foreign<F: HashAlg>(&self) -> Option<&Oid<F>>;
+}
+```
+
+Home produces visitors. Visitors don't produce home.
+
+Update the Store trait:
+
+```rust
+pub trait Store {
+    type Value;
+    type Hash: HashAlg = CoincidenceHash;
+    type Shard: ContentAddressed<Self::Hash>;
+    type Error;
+    type Loss: Loss;
+
+    fn insert(&mut self, value: Self::Value)
+        -> Imperfect<Self::Shard, Self::Error, Self::Loss>;
+    fn get(&self, oid: &MirrorOid<Self::Hash>)
+        -> Imperfect<Self::Shard, Self::Error, Self::Loss>;
+}
+```
+
+Where this lives: `mirror/src/store.rs` (update existing).
 
 ### 2.1 Spectral compiles against mirror
 
@@ -115,7 +97,12 @@ Verify it compiles and runs against the merged mirror.
 
 ### 2.3 spectral-db takes Store
 
-spectral-db's core type becomes:
+spectral-db has three storage layers (from Mara's research):
+- Node store (git-backed, schema-validated)
+- SpectralCoordStore (eigenvalue vectors)
+- ManifoldStore (16×16 manifold states — already returns Imperfect)
+
+SpectralDb becomes generic over Store:
 
 ```rust
 pub struct SpectralDb<S: Store> {
@@ -123,16 +110,25 @@ pub struct SpectralDb<S: Store> {
 }
 
 impl<S: Store> SpectralDb<S> {
-    pub fn tick(&mut self, signal: S::Value) -> Imperfect<S::Shard, S::Error, S::Loss>;
-    pub fn tock(&mut self) -> Imperfect<(), S::Error, S::Loss>;
+    pub fn tick(&mut self, signal: S::Value)
+        -> Imperfect<S::Shard, S::Error, S::Loss>;
+    pub fn tock(&mut self)
+        -> Imperfect<(), S::Error, S::Loss>;
 }
 ```
 
-The Store trait comes from mirror. SpectralDb is generic over it.
+Three store impls, one for each layer. Linked by SpectralIndex.
 The shape of tick/tock emerges from wiring the five optic commands
 through the store.
 
 What breaks here tells us what Store is missing.
+
+Key findings from Mara's research:
+- Loss has direction (mutation vs measurement) — may need two Loss types
+- The three stores aren't independent — linked through SpectralIndex
+- ManifoldStore is closest to Store shape already
+- `.conv` grammar and `schema.rs` parser are stale — mirror's parser replaces them
+- Mnesia integration structurally complete, has placeholder stubs
 
 ### 2.4 shard> prompt
 
@@ -159,10 +155,12 @@ The skeleton that everything else builds on.
 ### 2.5 Done when
 
 - `spectral focus boot/00-prism.mirror` → prints optic nodes
-- `spectral compile boot/00-prism.mirror` → prints OID
+- `spectral compile boot/00-prism.mirror` → prints OID (coincidence hash)
 - `spectral init` → creates `.git/mirror/` + writes crystal
 - `spectral repl` → `shard>` prompt, parses expressions, prints results
 - spectral-db compiles with `Store` generic
+- MirrorOid<CoincidenceHash> is the default throughout
+- ForeignKey<SHA1> bridges to git
 
 ---
 
@@ -173,6 +171,8 @@ After both ticks, we know:
 - What MirrorLoss fields the CLI actually reads (the loss settles)
 - What the REPL needs from the parser (the parse contract settles)
 - Where the five optic commands break (the missing pieces reveal themselves)
+- Whether the three-store architecture needs one Store or three (the shape emerges)
+- Whether directed loss (mutation vs measurement) needs separate types
 
 That's task-0: spectral-db. Its shape comes FROM ticks 1+2.
 We don't design spectral-db. We discover it.
