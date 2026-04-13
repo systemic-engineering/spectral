@@ -48,6 +48,7 @@ fn main() {
         eprintln!();
         eprintln!("session:");
         eprintln!("  spectral init                start a spectral session");
+        eprintln!("  spectral repl                shard> prompt");
         eprintln!("  spectral tick                advance the clock");
         eprintln!("  spectral tock                settle the graph");
         eprintln!("  spectral shatter             break apart a composite");
@@ -72,12 +73,43 @@ fn main() {
 
         // Session commands
         "init" => {
+            // Create .spectral/ session directory
             match session::Session::init(Path::new(".")) {
-                Ok(_) => process::exit(0),
+                Ok(_) => {}
                 Err(e) => {
                     eprintln!("spectral init: {}", e);
                     process::exit(1);
                 }
+            }
+            // Create .git/mirror/ for crystal storage
+            let mirror_dir = Path::new(".git/mirror");
+            if mirror_dir.exists() {
+                eprintln!("spectral: .git/mirror/ already exists");
+            } else if Path::new(".git").exists() {
+                match std::fs::create_dir_all(mirror_dir) {
+                    Ok(_) => eprintln!("spectral: initialized .git/mirror/"),
+                    Err(e) => eprintln!("spectral: failed to create .git/mirror/: {}", e),
+                }
+            } else {
+                eprintln!("spectral: no .git directory (not a git repo — skipping .git/mirror/)");
+            }
+            process::exit(0);
+        }
+
+        // REPL — shard> prompt
+        "repl" => {
+            use std::io::{self, Write, BufRead};
+            let stdin = io::stdin();
+            loop {
+                eprint!("shard> ");
+                io::stderr().flush().unwrap();
+                let mut line = String::new();
+                if stdin.lock().read_line(&mut line).unwrap() == 0 { break; }
+                let trimmed = line.trim();
+                if trimmed == "exit" || trimmed == "quit" { break; }
+                if trimmed.is_empty() { continue; }
+                // dispatch through mirror
+                println!("  (not yet wired)");
             }
         }
 
