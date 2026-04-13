@@ -10,14 +10,16 @@ path = "src/main.rs"
 
 [dependencies]
 mirror = { path = "../mirror" }
-lens = { path = "../lens" }
-prism = { path = "../prism" }
-spectral-db = { path = "../spectral-db" }
+prism = { package = "prism-core", path = "../prism/core" }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
-conversation = { path = "../conversation" }
-ractor = "0.15"
-tokio = { version = "1", features = ["full"] }
+
+# Temporarily disabled — fate crate needs prism-core migration (PureBeam → Optic)
+# lens = { path = "../lens" }
+# spectral-db = { path = "../spectral-db" }
+# conversation = { path = "../conversation" }
+# ractor = "0.15"
+# tokio = { version = "1", features = ["full"] }
 
 [dev-dependencies]
 tempfile = "3"
