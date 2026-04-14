@@ -1,1 +1,0 @@
--record(resolve_phase, {phase_oid :: conversation@oid:oid()}).

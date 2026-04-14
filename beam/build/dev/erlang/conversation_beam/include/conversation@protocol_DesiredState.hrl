@@ -1,1 +1,0 @@
--record(desired_state, {process :: binary(), state :: binary()}).

@@ -1,1 +1,0 @@
--record(scoped_oid, {oid :: conversation@oid:oid()}).

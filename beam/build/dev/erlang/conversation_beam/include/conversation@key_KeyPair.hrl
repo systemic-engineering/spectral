@@ -1,1 +1,0 @@
--record(key_pair, {public :: bitstring(), private :: bitstring()}).

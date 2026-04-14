@@ -1,1 +1,0 @@
--record(shannon_loss, {bits :: float()}).

@@ -1,1 +1,0 @@
--record('case', {subject :: binary(), arms :: list(conversation@protocol:arm())}).

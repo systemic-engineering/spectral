@@ -1,1 +1,0 @@
--record(coarsened, {from :: prism_beam:precision(), to :: prism_beam:precision()}).

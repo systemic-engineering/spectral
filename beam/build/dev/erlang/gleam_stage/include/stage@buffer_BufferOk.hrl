@@ -1,1 +1,0 @@
--record(buffer_ok, {buffer :: stage@buffer:buffer(any()), dropped :: integer()}).

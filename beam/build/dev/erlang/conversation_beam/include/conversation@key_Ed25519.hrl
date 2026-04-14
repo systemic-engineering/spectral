@@ -1,1 +1,0 @@
--record(ed25519, {public :: bitstring()}).

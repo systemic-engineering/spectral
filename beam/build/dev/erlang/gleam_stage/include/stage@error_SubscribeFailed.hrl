@@ -1,1 +1,0 @@
--record(subscribe_failed, {reason :: binary()}).

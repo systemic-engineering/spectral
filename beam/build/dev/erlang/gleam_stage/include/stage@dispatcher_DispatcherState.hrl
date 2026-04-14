@@ -1,1 +1,0 @@
--record(dispatcher_state, {demands :: gleam@dict:dict(any(), integer())}).
