@@ -73,8 +73,28 @@ fn main() {
 
         // Session commands
         "init" => {
-            // Create .spectral/ session directory
-            match session::Session::init(Path::new(".")) {
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
+            let target = Path::new(path);
+
+            // Phase 1: identity observation via .mirror files (apache2 layer)
+            match spectral::apache2::init::init_identity(target) {
+                terni::Imperfect::Success(result) => {
+                    eprintln!("spectral init: {} grammars compiled", result.mirror_files_found);
+                    eprintln!("  bias chain: {}", result.bias_chain.ordering().join(" => "));
+                    eprintln!("  holonomy: 0.000 (crystal)");
+                }
+                terni::Imperfect::Partial(result, loss) => {
+                    eprintln!("spectral init: {} grammars ({} with warnings)",
+                        result.mirror_files_found, loss.grammars_with_warnings);
+                    eprintln!("  bias chain: {}", result.bias_chain.ordering().join(" => "));
+                }
+                terni::Imperfect::Failure(_, _) => {
+                    // No .mirror files — not an error, just no identity to observe yet
+                }
+            }
+
+            // Phase 2: session directory (.spectral/)
+            match session::Session::init(target) {
                 Ok(_) => {}
                 Err(e) => {
                     eprintln!("spectral init: {}", e);
@@ -82,11 +102,12 @@ fn main() {
                 }
             }
             // Create .git/mirror/ for crystal storage
-            let mirror_dir = Path::new(".git/mirror");
+            let mirror_dir = target.join(".git/mirror");
+            let git_dir = target.join(".git");
             if mirror_dir.exists() {
                 eprintln!("spectral: .git/mirror/ already exists");
-            } else if Path::new(".git").exists() {
-                match std::fs::create_dir_all(mirror_dir) {
+            } else if git_dir.exists() {
+                match std::fs::create_dir_all(&mirror_dir) {
                     Ok(_) => eprintln!("spectral: initialized .git/mirror/"),
                     Err(e) => eprintln!("spectral: failed to create .git/mirror/: {}", e),
                 }
