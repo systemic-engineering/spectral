@@ -1,0 +1,1 @@
+-record(branch, {arms :: list(conversation@protocol:arm())}).

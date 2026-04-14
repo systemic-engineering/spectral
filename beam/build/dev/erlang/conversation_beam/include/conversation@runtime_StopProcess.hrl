@@ -1,0 +1,1 @@
+-record(stop_process, {name :: binary()}).

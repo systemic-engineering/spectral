@@ -1,0 +1,1 @@
+-record(prism, {dimension :: integer(), projection :: list(list(float()))}).

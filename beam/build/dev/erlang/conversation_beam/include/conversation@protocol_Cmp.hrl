@@ -1,0 +1,1 @@
+-record(cmp, {op :: conversation@protocol:op(), value :: binary()}).

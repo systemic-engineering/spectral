@@ -1,0 +1,1 @@
+-record(pressure, {ratio :: float()}).

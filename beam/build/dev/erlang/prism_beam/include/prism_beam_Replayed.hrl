@@ -1,0 +1,1 @@
+-record(replayed, {from_step :: integer()}).

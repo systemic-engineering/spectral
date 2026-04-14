@@ -1,0 +1,13 @@
+name = "conversation_beam"
+version = "0.1.0"
+description = "conversation — BEAM runtime. Desired state convergence."
+
+[dependencies]
+gleam_stdlib = ">= 0.44.0 and < 2.0.0"
+gleam_erlang = ">= 0.25.0 and < 2.0.0"
+gleam_otp = ">= 1.0.0 and < 2.0.0"
+gleam_stage = { path = "../../gleam_stage" }
+prism_beam = { path = "../../prism/beam" }
+
+[dev-dependencies]
+gleeunit = ">= 1.0.0 and < 2.0.0"

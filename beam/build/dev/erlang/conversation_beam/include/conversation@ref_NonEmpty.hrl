@@ -1,0 +1,1 @@
+-record(non_empty, {first :: any(), rest :: list(any())}).

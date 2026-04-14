@@ -1,0 +1,1 @@
+-record(automatic, {max_demand :: integer(), min_demand :: integer()}).
