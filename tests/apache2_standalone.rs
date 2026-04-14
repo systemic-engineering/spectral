@@ -226,3 +226,78 @@ fn naming_loss_combine() {
     assert_eq!(c.candidates_considered, 8);
     assert_eq!(c.candidates_rejected, 3);
 }
+
+// ── Observation primitives ──────────────────────────────────────────
+
+use spectral::apache2::observe::Observation;
+
+#[test]
+fn observation_from_value() {
+    let obs = Observation::new("position".to_string(), 16);
+    assert_eq!(obs.label(), "position");
+    assert_eq!(obs.dimensions(), 16);
+}
+
+#[test]
+fn observation_as_imperfect_full() {
+    let obs = Observation::new("position".to_string(), 16);
+    let result = obs.measure(16);
+    assert_eq!(result, Imperfect::Success(&obs));
+}
+
+#[test]
+fn observation_as_imperfect_partial() {
+    let obs = Observation::new("position".to_string(), 16);
+    let result = obs.measure(10);
+    assert_eq!(result, Imperfect::Partial(&obs, ObserveLoss { dark_dimensions: 6 }));
+}
+
+#[test]
+fn observation_as_imperfect_dark() {
+    let obs = Observation::new("position".to_string(), 16);
+    let result = obs.measure(0);
+    let expected_loss = ObserveLoss { dark_dimensions: 16 };
+    assert_eq!(result, Imperfect::Failure("no dimensions observed".to_string(), expected_loss));
+}
+
+// ── spectral init ───────────────────────────────────────────────────
+
+use spectral::apache2::init::{init_identity, InitResult};
+
+#[test]
+fn init_from_empty_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = init_identity(dir.path());
+    assert!(matches!(result, Imperfect::Failure(_, _)));
+}
+
+#[test]
+fn init_from_directory_with_mirror_files() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("00-narrative.mirror"), "narrative content").unwrap();
+    std::fs::write(dir.path().join("01-identity.mirror"), "identity content").unwrap();
+    let result = init_identity(dir.path());
+    match result {
+        Imperfect::Success(init) => {
+            assert_eq!(init.mirror_files_found, 2);
+            assert_eq!(init.bias_chain.len(), 2);
+            assert_eq!(init.files.len(), 2);
+        }
+        other => panic!("expected Success, got {:?}", other),
+    }
+}
+
+#[test]
+fn init_derives_bias_chain_from_file_order() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("02-practice.mirror"), "practice").unwrap();
+    std::fs::write(dir.path().join("00-narrative.mirror"), "narrative").unwrap();
+    std::fs::write(dir.path().join("01-identity.mirror"), "identity").unwrap();
+    let result = init_identity(dir.path());
+    match result {
+        Imperfect::Success(init) => {
+            assert_eq!(init.bias_chain.ordering(), &["narrative", "identity", "practice"]);
+        }
+        other => panic!("expected Success, got {:?}", other),
+    }
+}
