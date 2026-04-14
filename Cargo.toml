@@ -14,14 +14,21 @@ path = "src/main.rs"
 
 [features]
 default = []
-sel = []
+sel = ["dep:rustyline", "dep:colored", "dep:reqwest", "dep:tokio"]
 
 [dependencies]
 mirror = { path = "../mirror" }
 prism = { package = "prism-core", path = "../prism/core" }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
 terni = { path = "../prism/imperfect" }
+
+# sel-gated dependencies
+rustyline = { version = "14", optional = true }
+colored = { version = "2", optional = true }
+reqwest = { version = "0.12", features = ["json"], optional = true }
+tokio = { version = "1", features = ["full"], optional = true }
 
 # Temporarily disabled — fate crate needs prism-core migration (PureBeam → Optic)
 # lens = { path = "../lens" }
