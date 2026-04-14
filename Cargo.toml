@@ -4,9 +4,17 @@ version = "0.2.0"
 edition = "2021"
 description = "git for graphs. One binary. Five operations. Everything settles."
 
+[lib]
+name = "spectral"
+path = "src/lib.rs"
+
 [[bin]]
 name = "spectral"
 path = "src/main.rs"
+
+[features]
+default = []
+sel = []
 
 [dependencies]
 mirror = { path = "../mirror" }
