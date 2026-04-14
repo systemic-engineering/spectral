@@ -62,6 +62,7 @@ fn main() {
         eprintln!("  spectral mirror <cmd>        compiler");
         eprintln!("  spectral memory <cmd>        agent memory");
         eprintln!("  spectral serve [--project .]  MCP server");
+        eprintln!("  spectral join <path>         join identity conversation");
         process::exit(1);
     }
 
@@ -186,6 +187,23 @@ fn main() {
                 .map(|s| s.as_str())
                 .unwrap_or(".");
             serve::serve(project);
+        }
+
+        // Join — identity conversation (requires --features sel)
+        "join" => {
+            #[cfg(feature = "sel")]
+            {
+                let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
+                if let Err(e) = spectral::sel::join::join(Path::new(path)) {
+                    eprintln!("spectral join: {}", e);
+                    process::exit(1);
+                }
+            }
+            #[cfg(not(feature = "sel"))]
+            {
+                eprintln!("spectral join: requires --features sel");
+                process::exit(1);
+            }
         }
 
         other => {
