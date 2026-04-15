@@ -11,5 +11,6 @@ pub mod shatter_model;
 pub mod reflection;
 pub mod weight_file;
 pub mod training;
+pub mod pipeline;
 #[cfg(test)]
 mod nl_integration_test;
