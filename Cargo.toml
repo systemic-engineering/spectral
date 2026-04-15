@@ -39,3 +39,4 @@ ractor = { version = "0.15", features = ["async-trait"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+spectral-db = { path = "../spectral-db", features = ["test-support"] }
