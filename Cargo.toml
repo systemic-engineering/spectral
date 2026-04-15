@@ -1,3 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+    ".",
+    "crates/witness-rs",
+    "crates/gestalt",
+]
+
+[workspace.dependencies]
+prism-core = { path = "../prism/core" }
+terni = { path = "../prism/imperfect" }
+mirror = { path = "../mirror" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
 [package]
 name = "spectral"
 version = "0.2.0"

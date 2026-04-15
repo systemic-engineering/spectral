@@ -1,0 +1,9 @@
+[package]
+name = "gestalt"
+version = "0.1.0"
+edition = "2021"
+description = "Design system types for spectral. Tokens as lambdas, virtual DOM, panels."
+
+[dependencies]
+prism-core = { workspace = true, features = ["lambda"] }
+terni = { workspace = true }
