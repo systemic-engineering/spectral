@@ -56,10 +56,12 @@ impl Actor for FateActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            FateMsg::Tick(_features, _reply) => {
-                todo!("implement tick dispatch")
+            FateMsg::Tick(features, reply) => {
+                let output = state.fate.tick(&features);
+                let _ = reply.send(output);
             }
         }
+        Ok(())
     }
 }
 
