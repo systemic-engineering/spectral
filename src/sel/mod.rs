@@ -4,3 +4,4 @@
 
 pub mod llm;
 pub mod join;
+pub mod fate_actor;

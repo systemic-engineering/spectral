@@ -14,7 +14,7 @@ path = "src/main.rs"
 
 [features]
 default = []
-sel = ["dep:rustyline", "dep:colored", "dep:reqwest", "dep:tokio"]
+sel = ["dep:rustyline", "dep:colored", "dep:reqwest", "dep:tokio", "dep:ractor", "dep:fate"]
 
 [dependencies]
 mirror = { path = "../mirror" }
@@ -29,13 +29,13 @@ rustyline = { version = "14", optional = true }
 colored = { version = "2", optional = true }
 reqwest = { version = "0.12", features = ["json"], optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
+fate = { path = "../fate", optional = true }
+ractor = { version = "0.15", features = ["async-trait"], optional = true }
 
-# Temporarily disabled — fate crate needs prism-core migration (PureBeam → Optic)
+# Temporarily disabled — pending further integration
 # lens = { path = "../lens" }
 # spectral-db = { path = "../spectral-db" }
 # conversation = { path = "../conversation" }
-# ractor = "0.15"
-# tokio = { version = "1", features = ["full"] }
 
 [dev-dependencies]
 tempfile = "3"
