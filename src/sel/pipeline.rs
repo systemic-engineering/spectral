@@ -364,6 +364,8 @@ pub struct ModelPipeline {
     pub shatter: Shatter,
     pub position: Option<Oid>,
     pub eigenvalues: Vec<f64>,
+    /// Schema fields for optic validation (populated by new_with_db).
+    schema: Vec<FieldOptic>,
 }
 
 impl ModelPipeline {
@@ -375,12 +377,30 @@ impl ModelPipeline {
             shatter: Shatter::untrained(44),
             position: None,
             eigenvalues: vec![0.5; 50],
+            schema: Vec::new(),
+        }
+    }
+
+    /// Create a pipeline backed by a graph schema.
+    ///
+    /// Extracts field descriptors from the schema so that `process()` uses
+    /// them for optic validation. The `SpectralDb` reference is not stored;
+    /// only the schema shape is captured. When Mirror execution is wired,
+    /// this constructor will hold a graph reference for traversal.
+    pub fn new_with_db<D>(_db: &D, schema: &[FieldOptic]) -> Self {
+        ModelPipeline {
+            surface: Surface::untrained(42),
+            reflection: Reflection::untrained(43),
+            shatter: Shatter::untrained(44),
+            position: None,
+            eigenvalues: vec![0.5; 50],
+            schema: schema.to_vec(),
         }
     }
 
     /// Process NL input through the full pipeline.
     pub fn process(&mut self, input: &str) -> Imperfect<String, PipelineError, PipelineLoss> {
-        self.process_with_schema(input, &[])
+        self.process_with_schema(input, &self.schema.clone())
     }
 
     /// Process with an explicit graph schema for optic validation.
