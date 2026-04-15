@@ -1,0 +1,15 @@
+name = "spectral_admin"
+version = "0.1.0"
+description = "spectral admin — garden design system admin panel. Gleam web server."
+
+[dependencies]
+gleam_stdlib = ">= 0.44.0 and < 2.0.0"
+gleam_erlang = ">= 0.25.0 and < 2.0.0"
+gleam_http = ">= 3.6.0 and < 4.0.0"
+gleam_json = ">= 2.0.0 and < 3.0.0"
+mist = ">= 4.0.0 and < 5.0.0"
+wisp = ">= 2.0.0 and < 3.0.0"
+gen_prism = { path = "../gen_prism" }
+
+[dev-dependencies]
+gleeunit = ">= 1.0.0 and < 2.0.0"
