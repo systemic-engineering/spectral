@@ -5,3 +5,9 @@
 pub mod llm;
 pub mod join;
 pub mod fate_actor;
+pub mod matrix;
+pub mod surface;
+pub mod shatter_model;
+pub mod reflection;
+pub mod weight_file;
+pub mod training;
