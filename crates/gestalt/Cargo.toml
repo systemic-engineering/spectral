@@ -2,8 +2,9 @@
 name = "gestalt"
 version = "0.1.0"
 edition = "2021"
-description = "Design system types for spectral. Tokens as lambdas, virtual DOM, panels."
+description = "Unified document model and design system for spectral. Tokens, DOM, panels, document model, markdown encoding."
 
 [dependencies]
 prism-core = { workspace = true, features = ["lambda"] }
 terni = { workspace = true }
+pulldown-cmark = { version = "0.13", default-features = false }
