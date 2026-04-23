@@ -32,6 +32,7 @@ pub struct McpState {
     pub memory: ActorRef<MemoryMsg>,
     pub fate: ActorRef<FateMsg>,
     pub lsp: Option<ActorRef<LspMsg>>,
+    pub project_path: Option<std::path::PathBuf>,
 }
 
 // ── Actor ────────────────────────────────────────────────────────────
@@ -44,6 +45,7 @@ pub struct McpActorArgs {
     pub memory: ActorRef<MemoryMsg>,
     pub fate: ActorRef<FateMsg>,
     pub lsp: Option<ActorRef<LspMsg>>,
+    pub project_path: Option<std::path::PathBuf>,
 }
 
 impl McpActor {
@@ -56,7 +58,7 @@ impl McpActor {
         let (actor_ref, _handle) = Actor::spawn(
             name,
             McpActor,
-            McpActorArgs { memory, fate, lsp: None },
+            McpActorArgs { memory, fate, lsp: None, project_path: None },
         )
         .await?;
         Ok(actor_ref)
@@ -72,7 +74,7 @@ impl McpActor {
         let (actor_ref, _handle) = Actor::spawn(
             name,
             McpActor,
-            McpActorArgs { memory, fate, lsp: Some(lsp) },
+            McpActorArgs { memory, fate, lsp: Some(lsp), project_path: None },
         )
         .await?;
         Ok(actor_ref)
@@ -94,6 +96,7 @@ impl Actor for McpActor {
             memory: args.memory,
             fate: args.fate,
             lsp: args.lsp,
+            project_path: args.project_path,
         })
     }
 
@@ -123,7 +126,7 @@ async fn dispatch_tool(name: &str, arguments: &Value, state: &McpState) -> Value
         "memory_recall" => dispatch_memory_recall(arguments, state).await,
         "memory_crystallize" => dispatch_memory_crystallize(state).await,
         "spectral_loss" => dispatch_spectral_loss(state).await,
-        "gestalt_detect" => dispatch_gestalt_detect(arguments).await,
+        "gestalt_detect" => dispatch_gestalt_detect(arguments, state).await,
         _ => tool_result_error(&format!("{}: unknown tool", name)),
     }
 }
@@ -131,15 +134,32 @@ async fn dispatch_tool(name: &str, arguments: &Value, state: &McpState) -> Value
 /// memory_status → MemoryActor::Status
 async fn dispatch_memory_status(state: &McpState) -> Value {
     match ractor::call!(state.memory, MemoryMsg::Status) {
-        Ok(status) => tool_result_text(&format!(
-            "nodes: {}, edges: {}, crystals: {}, cached: {}, queries: {}, hot_paths: {}",
-            status.node_count,
-            status.edge_count,
-            status.crystals,
-            status.cached,
-            status.query_count,
-            status.hot_paths,
-        )),
+        Ok(status) => {
+            // Write status.json so CLI subcommands can read live state
+            if let Some(ref project_path) = state.project_path {
+                let status_json = serde_json::json!({
+                    "nodes": status.node_count,
+                    "edges": status.edge_count,
+                    "crystals": status.crystals,
+                    "cached": status.cached,
+                    "queries": status.query_count,
+                    "hot_paths": status.hot_paths,
+                    "loss_bits": 0.0,
+                    "growth_pct": 0.0
+                });
+                let status_path = project_path.join(".spectral/status.json");
+                let _ = std::fs::write(&status_path, status_json.to_string());
+            }
+            tool_result_text(&format!(
+                "nodes: {}, edges: {}, crystals: {}, cached: {}, queries: {}, hot_paths: {}",
+                status.node_count,
+                status.edge_count,
+                status.crystals,
+                status.cached,
+                status.query_count,
+                status.hot_paths,
+            ))
+        }
         Err(e) => tool_result_error(&format!("memory_status failed: {}", e)),
     }
 }
@@ -243,8 +263,8 @@ fn format_loss_report(report: &LossReport) -> Value {
     tool_result_text(&lines.join("\n"))
 }
 
-/// gestalt_detect — run gestalt auto-detection on a directory
-async fn dispatch_gestalt_detect(arguments: &Value) -> Value {
+/// gestalt_detect — run gestalt auto-detection on a directory, persist results to spectral-db
+async fn dispatch_gestalt_detect(arguments: &Value, state: &McpState) -> Value {
     let path_str = match arguments.get("path").and_then(|v| v.as_str()) {
         Some(p) => p,
         None => return tool_result_error("gestalt_detect: missing 'path' argument"),
@@ -280,12 +300,30 @@ async fn dispatch_gestalt_detect(arguments: &Value) -> Value {
             .join(", ");
         lines.push(format!("eigenvalues: [{}]", profile_str));
         lines.push(format!("profile_oid: {}", profile.oid()));
+
+        // Persist eigenvalue profile to spectral-db
+        let eigenboard_content = format!(
+            "repo:{} fiedler={:.4} nodes={} edges={} oid={}",
+            path_str,
+            profile.fiedler_value(),
+            graph.nodes.len(),
+            graph.edges.len(),
+            profile.oid(),
+        );
+        let _ = ractor::call!(
+            state.memory,
+            MemoryMsg::Store,
+            "eigenboard".to_string(),
+            eigenboard_content.into_bytes()
+        );
     } else {
         lines.push("profile: dark (no connectivity)".to_string());
     }
 
     tool_result_text(&lines.join("\n"))
 }
+
+
 
 // ── JSON helpers ─────────────────────────────────────────────────────
 
@@ -318,7 +356,7 @@ mod tests {
     use crate::sel::mcp::lsp;
     use spectral_db::SpectralDb;
 
-    const SCHEMA: &str = "grammar @memory {\n  type = node | edge\n}";
+    const SCHEMA: &str = "grammar @memory {\n  type = node | edge | eigenboard\n}";
 
     fn open_test_db() -> (tempfile::TempDir, SpectralDb) {
         let dir = tempfile::tempdir().expect("failed to create tempdir");

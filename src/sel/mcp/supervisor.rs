@@ -212,6 +212,7 @@ impl Actor for SpectralSupervisor {
                 memory: memory_ref.clone(),
                 fate: fate_ref.clone(),
                 lsp: Some(lsp_ref.clone()),
+                project_path: Some(args.db_path.parent().unwrap_or(&args.db_path).to_path_buf()),
             },
             supervisor_cell,
         )
@@ -466,7 +467,7 @@ mod tests {
     use crate::sel::mcp::compiler::{CompileResult, CompilerMsg};
     use crate::sel::mcp::server::ToolCall;
 
-    const SCHEMA: &str = "grammar @memory {\n  type = node | edge\n}";
+    const SCHEMA: &str = "grammar @memory {\n  type = node | edge | eigenboard\n}";
 
     fn open_test_db() -> (tempfile::TempDir, SpectralDb, PathBuf) {
         let dir = tempfile::tempdir().expect("failed to create tempdir");

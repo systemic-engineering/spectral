@@ -145,7 +145,7 @@ impl Actor for MemoryActor {
 mod tests {
     use super::*;
 
-    const SCHEMA: &str = "grammar @memory {\n  type = node | edge\n}";
+    const SCHEMA: &str = "grammar @memory {\n  type = node | edge | eigenboard\n}";
 
     fn open_test_db() -> (tempfile::TempDir, SpectralDb) {
         let dir = tempfile::tempdir().expect("failed to create tempdir");
