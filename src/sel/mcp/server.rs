@@ -97,11 +97,89 @@ impl Actor for McpActor {
 // ── Dispatch ─────────────────────────────────────────────────────────
 
 /// Route a tool call to the appropriate child actor.
-///
-/// TODO: dispatch to MemoryActor, FateActor based on tool name prefix.
-async fn dispatch_tool(name: &str, _arguments: &Value, _state: &McpState) -> Value {
-    // Stub — all tools return "not yet wired" until dispatch is implemented
-    tool_result_error(&format!("{}: not yet wired", name))
+async fn dispatch_tool(name: &str, arguments: &Value, state: &McpState) -> Value {
+    match name {
+        "memory_status" => dispatch_memory_status(state).await,
+        "memory_store" => dispatch_memory_store(arguments, state).await,
+        "memory_recall" => dispatch_memory_recall(arguments, state).await,
+        "memory_crystallize" => dispatch_memory_crystallize(state).await,
+        _ => tool_result_error(&format!("{}: unknown tool", name)),
+    }
+}
+
+/// memory_status → MemoryActor::Status
+async fn dispatch_memory_status(state: &McpState) -> Value {
+    match ractor::call!(state.memory, MemoryMsg::Status) {
+        Ok(status) => tool_result_text(&format!(
+            "nodes: {}, edges: {}, crystals: {}, cached: {}, queries: {}, hot_paths: {}",
+            status.node_count,
+            status.edge_count,
+            status.crystals,
+            status.cached,
+            status.query_count,
+            status.hot_paths,
+        )),
+        Err(e) => tool_result_error(&format!("memory_status failed: {}", e)),
+    }
+}
+
+/// memory_store → MemoryActor::Store
+async fn dispatch_memory_store(arguments: &Value, state: &McpState) -> Value {
+    let node_type = match arguments.get("node_type").and_then(|v| v.as_str()) {
+        Some(t) => t.to_string(),
+        None => return tool_result_error("memory_store: missing 'node_type' argument"),
+    };
+    let content = match arguments.get("content").and_then(|v| v.as_str()) {
+        Some(c) => c.as_bytes().to_vec(),
+        None => return tool_result_error("memory_store: missing 'content' argument"),
+    };
+
+    match ractor::call!(state.memory, MemoryMsg::Store, node_type, content) {
+        Ok(Ok(oid)) => tool_result_text(&format!("stored: {}", oid)),
+        Ok(Err(e)) => tool_result_error(&format!("memory_store failed: {}", e)),
+        Err(e) => tool_result_error(&format!("memory_store actor error: {}", e)),
+    }
+}
+
+/// memory_recall → MemoryActor::Recall
+async fn dispatch_memory_recall(arguments: &Value, state: &McpState) -> Value {
+    let oid = match arguments.get("oid").and_then(|v| v.as_str()) {
+        Some(o) => o.to_string(),
+        None => return tool_result_error("memory_recall: missing 'oid' argument"),
+    };
+    let distance = arguments
+        .get("distance")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.5);
+
+    match ractor::call!(state.memory, MemoryMsg::Recall, oid, distance) {
+        Ok(nodes) => {
+            if nodes.is_empty() {
+                tool_result_text("no nodes found within distance")
+            } else {
+                let lines: Vec<String> = nodes
+                    .iter()
+                    .map(|n| format!("{} ({}): d={:.4}", n.oid, n.node_type, n.distance))
+                    .collect();
+                tool_result_text(&lines.join("\n"))
+            }
+        }
+        Err(e) => tool_result_error(&format!("memory_recall failed: {}", e)),
+    }
+}
+
+/// memory_crystallize → MemoryActor::Crystallize
+async fn dispatch_memory_crystallize(state: &McpState) -> Value {
+    match ractor::call!(state.memory, MemoryMsg::Crystallize) {
+        Ok(crystals) => {
+            if crystals.is_empty() {
+                tool_result_text("no subgraphs ready for crystallization")
+            } else {
+                tool_result_text(&format!("crystallized {} subgraphs", crystals.len()))
+            }
+        }
+        Err(e) => tool_result_error(&format!("memory_crystallize failed: {}", e)),
+    }
 }
 
 // ── JSON helpers ─────────────────────────────────────────────────────
