@@ -1,8 +1,9 @@
 //! MCP subsystem — actors for the Spectral MCP server.
 //!
 //! Each actor owns its resource. No shared mutexes. All access goes through messages.
+//! SpectralSupervisor is the root: it spawns and supervises all child actors.
 //!
-//! `start_mcp()` is the public entry point: spawns actors, runs the stdio loop.
+//! `start_mcp()` is the public entry point: spawns the supervisor tree, runs the stdio loop.
 
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
@@ -10,14 +11,16 @@ use std::path::PathBuf;
 use serde_json::{json, Value};
 use spectral_db::SpectralDb;
 
-use self::memory::MemoryActor;
-use self::server::{McpActor, McpMsg, ToolCall};
+use self::server::{McpMsg, ToolCall};
+use self::supervisor::{SpectralSupervisor, SupervisorMsg};
 use self::tools::{resource_definitions, scan_grammars, tool_definitions};
-use super::fate_actor::FateActor;
 
+pub mod cascade;
+pub mod compiler;
 pub mod lsp;
 pub mod memory;
 pub mod server;
+pub mod supervisor;
 pub mod tools;
 
 // ── Default schema for MCP memory ────────────────────────────────────
@@ -158,8 +161,9 @@ fn dispatch_protocol(
 
 /// Start the MCP server with full actor backing.
 ///
-/// Opens SpectralDb at `project_path/.spectral/`, spawns MemoryActor,
-/// FateActor, and McpActor, then runs the JSON-RPC stdio loop.
+/// Opens SpectralDb at `project_path/.spectral/`, spawns SpectralSupervisor
+/// (which spawns MemoryActor, FateActor, LspActor, CompilerActor,
+/// CascadeActor, and McpActor), then runs the JSON-RPC stdio loop.
 pub fn start_mcp(project_path: PathBuf) {
     eprintln!("spectral serve: starting MCP server (actor-backed)");
     eprintln!("  project: {}", project_path.display());
@@ -188,25 +192,25 @@ pub fn start_mcp(project_path: PathBuf) {
         }
     };
 
-    // Build tokio runtime and spawn actors
+    // Build tokio runtime and spawn supervisor tree
     let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
 
-    let mcp_ref = runtime.block_on(async {
-        let memory_ref = MemoryActor::spawn_with_db(Some("memory".to_string()), db)
-            .await
-            .expect("failed to spawn MemoryActor");
-
-        let fate_ref = FateActor::spawn_untrained(Some("fate".to_string()))
-            .await
-            .expect("failed to spawn FateActor");
-
-        McpActor::spawn_with_refs(
-            Some("mcp".to_string()),
-            memory_ref,
-            fate_ref,
+    let (supervisor_ref, mcp_ref) = runtime.block_on(async {
+        let supervisor_ref = SpectralSupervisor::spawn_all(
+            db,
+            db_path.clone(),
+            MEMORY_SCHEMA.to_string(),
+            MEMORY_PRECISION,
+            MEMORY_BYTES,
         )
         .await
-        .expect("failed to spawn McpActor")
+        .expect("failed to spawn SpectralSupervisor");
+
+        // Get McpActor ref from supervisor for stdio dispatch
+        let mcp_ref = ractor::call!(supervisor_ref, SupervisorMsg::GetMcpRef)
+            .expect("failed to get McpActor ref from supervisor");
+
+        (supervisor_ref, mcp_ref)
     });
 
     eprintln!("  MCP server ready (stdio) — actor-backed");
@@ -243,9 +247,9 @@ pub fn start_mcp(project_path: PathBuf) {
         }
     }
 
-    // Cleanup
+    // Cleanup — stop supervisor, which stops all children
     runtime.block_on(async {
-        mcp_ref.stop(None);
+        supervisor_ref.stop(None);
     });
 
     eprintln!("spectral serve: shutting down");
