@@ -60,3 +60,8 @@ spectral-db = { path = "../spectral-db", optional = true }
 [dev-dependencies]
 tempfile = "3"
 spectral-db = { path = "../spectral-db", features = ["test-support"] }
+divan = "0.1"
+
+[[bench]]
+name = "spectral_init"
+harness = false
