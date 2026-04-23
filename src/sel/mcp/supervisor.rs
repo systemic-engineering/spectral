@@ -211,6 +211,7 @@ impl Actor for SpectralSupervisor {
             super::server::McpActorArgs {
                 memory: memory_ref.clone(),
                 fate: fate_ref.clone(),
+                lsp: Some(lsp_ref.clone()),
             },
             supervisor_cell,
         )

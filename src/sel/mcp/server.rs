@@ -7,6 +7,7 @@
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use serde_json::{json, Value};
 
+use super::lsp::{LspMsg, LossReport};
 use super::memory::MemoryMsg;
 use crate::sel::fate_actor::FateMsg;
 
@@ -30,7 +31,7 @@ pub enum McpMsg {
 pub struct McpState {
     pub memory: ActorRef<MemoryMsg>,
     pub fate: ActorRef<FateMsg>,
-    // TODO: LspActor ref — tower-lsp has its own transport, needs careful wiring
+    pub lsp: Option<ActorRef<LspMsg>>,
 }
 
 // ── Actor ────────────────────────────────────────────────────────────
@@ -42,6 +43,7 @@ pub struct McpActor;
 pub struct McpActorArgs {
     pub memory: ActorRef<MemoryMsg>,
     pub fate: ActorRef<FateMsg>,
+    pub lsp: Option<ActorRef<LspMsg>>,
 }
 
 impl McpActor {
@@ -54,7 +56,23 @@ impl McpActor {
         let (actor_ref, _handle) = Actor::spawn(
             name,
             McpActor,
-            McpActorArgs { memory, fate },
+            McpActorArgs { memory, fate, lsp: None },
+        )
+        .await?;
+        Ok(actor_ref)
+    }
+
+    /// Spawn a McpActor with refs to child actors, including LspActor.
+    pub async fn spawn_with_lsp(
+        name: Option<String>,
+        memory: ActorRef<MemoryMsg>,
+        fate: ActorRef<FateMsg>,
+        lsp: ActorRef<LspMsg>,
+    ) -> Result<ActorRef<McpMsg>, ractor::SpawnErr> {
+        let (actor_ref, _handle) = Actor::spawn(
+            name,
+            McpActor,
+            McpActorArgs { memory, fate, lsp: Some(lsp) },
         )
         .await?;
         Ok(actor_ref)
@@ -75,6 +93,7 @@ impl Actor for McpActor {
         Ok(McpState {
             memory: args.memory,
             fate: args.fate,
+            lsp: args.lsp,
         })
     }
 
@@ -103,6 +122,7 @@ async fn dispatch_tool(name: &str, arguments: &Value, state: &McpState) -> Value
         "memory_store" => dispatch_memory_store(arguments, state).await,
         "memory_recall" => dispatch_memory_recall(arguments, state).await,
         "memory_crystallize" => dispatch_memory_crystallize(state).await,
+        "spectral_loss" => dispatch_spectral_loss(state).await,
         _ => tool_result_error(&format!("{}: unknown tool", name)),
     }
 }
@@ -182,6 +202,11 @@ async fn dispatch_memory_crystallize(state: &McpState) -> Value {
     }
 }
 
+/// spectral_loss → LspActor::GetLossReport
+async fn dispatch_spectral_loss(_state: &McpState) -> Value {
+    todo!("tick-4: dispatch_spectral_loss")
+}
+
 // ── JSON helpers ─────────────────────────────────────────────────────
 
 fn tool_result_text(text: &str) -> Value {
@@ -210,6 +235,7 @@ mod tests {
     use super::*;
     use super::super::memory::MemoryActor;
     use crate::sel::fate_actor::FateActor;
+    use crate::sel::mcp::lsp;
     use spectral_db::SpectralDb;
 
     const SCHEMA: &str = "grammar @memory {\n  type = node | edge\n}";
@@ -407,6 +433,96 @@ mod tests {
         assert!(text.contains("no subgraphs ready"), "got: {}", text);
 
         mcp_ref.stop(None);
+        memory_ref.stop(None);
+        fate_ref.stop(None);
+    }
+
+    #[tokio::test]
+    async fn mcp_routes_spectral_loss_without_lsp() {
+        let (_dir, mcp_ref, memory_ref, fate_ref) = spawn_test_mcp().await;
+
+        let result: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "spectral_loss".to_string(),
+                    arguments: json!({}),
+                },
+                reply,
+            )
+        )
+        .expect("call failed");
+
+        // Without LSP actor, should return a message saying not connected
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("not connected"), "got: {}", text);
+
+        mcp_ref.stop(None);
+        memory_ref.stop(None);
+        fate_ref.stop(None);
+    }
+
+    #[tokio::test]
+    async fn mcp_routes_spectral_loss_with_lsp() {
+        let (_dir, db) = open_test_db();
+        let memory_ref = MemoryActor::spawn_with_db(None, db)
+            .await
+            .expect("spawn memory failed");
+        let fate_ref = FateActor::spawn_untrained(None)
+            .await
+            .expect("spawn fate failed");
+        let (lsp_ref, _docs): (ActorRef<LspMsg>, _) =
+            lsp::LspActor::spawn_new(None)
+                .await
+                .expect("spawn lsp failed");
+
+        // Open a doc so there's loss data
+        lsp_ref
+            .cast(LspMsg::DidOpen {
+                uri: "file:///test.mirror".to_string(),
+                source: "type color = red | blue\nwidget foo".to_string(),
+            })
+            .expect("cast failed");
+
+        // Sync
+        let _: lsp::DocumentDiagnostics = ractor::call!(
+            lsp_ref,
+            |reply| LspMsg::GetDiagnostics {
+                uri: "file:///test.mirror".to_string(),
+                reply,
+            }
+        )
+        .expect("sync failed");
+
+        let mcp_ref = McpActor::spawn_with_lsp(
+            None,
+            memory_ref.clone(),
+            fate_ref.clone(),
+            lsp_ref.clone(),
+        )
+        .await
+        .expect("spawn mcp failed");
+
+        let result: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "spectral_loss".to_string(),
+                    arguments: json!({}),
+                },
+                reply,
+            )
+        )
+        .expect("call failed");
+
+        let text = result["content"][0]["text"].as_str().unwrap();
+        // Should contain real loss data
+        assert!(text.contains("self_loss:"), "got: {}", text);
+        assert!(text.contains("file:///test.mirror"), "got: {}", text);
+        assert!(text.contains("loss:"), "got: {}", text);
+
+        mcp_ref.stop(None);
+        lsp_ref.stop(None);
         memory_ref.stop(None);
         fate_ref.stop(None);
     }

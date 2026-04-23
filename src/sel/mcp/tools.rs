@@ -110,6 +110,11 @@ pub fn builtin_tool_definitions() -> Vec<Value> {
             "description": "Get spectral memory status — node count, edge count, crystals.",
             "inputSchema": { "type": "object", "properties": {} }
         }),
+        json!({
+            "name": "spectral_loss",
+            "description": "Inspect the peer's self-knowledge: per-file loss breakdown, self-loss metric, and proposal acceptance stats. The honest gutter in data form.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
     ]
 }
 
@@ -176,6 +181,7 @@ mod tests {
         assert!(names.contains(&"memory_recall"));
         assert!(names.contains(&"memory_crystallize"));
         assert!(names.contains(&"memory_status"));
+        assert!(names.contains(&"spectral_loss"));
     }
 
     #[test]
