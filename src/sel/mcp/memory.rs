@@ -90,10 +90,54 @@ impl Actor for MemoryActor {
     async fn handle(
         &self,
         _myself: ActorRef<Self::Msg>,
-        _message: Self::Msg,
-        _state: &mut Self::State,
+        message: Self::Msg,
+        state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        todo!("tick-1a: implement message handling")
+        match message {
+            MemoryMsg::Store(node_type, data, reply) => {
+                let result = state
+                    .db
+                    .insert(&node_type, &data)
+                    .map_err(|e| e.to_string());
+                let _ = reply.send(result);
+            }
+
+            MemoryMsg::Recall(oid, distance, reply) => {
+                let result_set = state.db.near(&oid, distance);
+                let recalled: Vec<RecalledNode> = result_set
+                    .nodes
+                    .into_iter()
+                    .map(|node| {
+                        let dist = state
+                            .db
+                            .spectral_distance(&oid, &node.oid)
+                            .unwrap_or(f64::INFINITY);
+                        RecalledNode {
+                            oid: node.oid,
+                            node_type: node.node_type,
+                            data: node.data,
+                            distance: dist,
+                        }
+                    })
+                    .collect();
+                let _ = reply.send(recalled);
+            }
+
+            MemoryMsg::Crystallize(reply) => {
+                let crystals = state.db.crystallize();
+                let _ = reply.send(crystals);
+            }
+
+            MemoryMsg::Status(reply) => {
+                let status = state.db.status();
+                let _ = reply.send(status);
+            }
+
+            MemoryMsg::Flush => {
+                state.db.flush();
+            }
+        }
+        Ok(())
     }
 }
 
