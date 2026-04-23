@@ -17,6 +17,8 @@ use self::tools::{resource_definitions, scan_grammars, tool_definitions};
 
 pub mod cascade;
 pub mod compiler;
+#[cfg(test)]
+mod integration_tests;
 pub mod lsp;
 pub mod memory;
 pub mod server;
