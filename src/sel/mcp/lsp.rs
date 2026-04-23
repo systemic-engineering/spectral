@@ -148,11 +148,54 @@ impl Actor for LspActor {
         &self,
         _myself: ActorRef<Self::Msg>,
         message: Self::Msg,
-        _state: &mut Self::State,
+        state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            _ => todo!("LspActor message handling not yet implemented"),
+            LspMsg::DidOpen { uri, source } => {
+                let (_luminosity, diags) = state.backend.compile_and_diagnose(&source);
+                state.documents.insert(uri.clone(), source);
+                state.diagnostics.insert(uri, diags);
+            }
+
+            LspMsg::DidChange { uri, source } => {
+                let (_luminosity, diags) = state.backend.compile_and_diagnose(&source);
+                state.documents.insert(uri.clone(), source);
+                state.diagnostics.insert(uri, diags);
+            }
+
+            LspMsg::DidClose { uri } => {
+                state.documents.remove(&uri);
+                state.diagnostics.remove(&uri);
+            }
+
+            LspMsg::Hover {
+                uri,
+                line,
+                character,
+                reply,
+            } => {
+                let result = hover_at_position(state, &uri, line, character);
+                let _ = reply.send(HoverResult { contents: result });
+            }
+
+            LspMsg::GetDiagnostics { uri, reply } => {
+                let diags = state
+                    .diagnostics
+                    .get(&uri)
+                    .map(|d| d.value().clone())
+                    .unwrap_or_default();
+                let _ = reply.send(DocumentDiagnostics {
+                    uri,
+                    diagnostics: diags,
+                });
+            }
+
+            LspMsg::GetCompletions { reply } => {
+                let items = mirror_completion_items();
+                let _ = reply.send(items);
+            }
         }
+        Ok(())
     }
 }
 
