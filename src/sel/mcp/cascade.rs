@@ -96,10 +96,21 @@ impl Actor for CascadeActor {
     async fn handle(
         &self,
         _myself: ActorRef<Self::Msg>,
-        _message: Self::Msg,
-        _state: &mut Self::State,
+        message: Self::Msg,
+        state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        todo!("CascadeActor::handle — implement in green phase")
+        match message {
+            CascadeMsg::RunCascade(reply) => {
+                let changed = state.db.run_cascade();
+                state.cascade_count += 1;
+                let _ = reply.send(changed);
+            }
+            CascadeMsg::Tick => {
+                let _changed = state.db.run_cascade();
+                state.cascade_count += 1;
+            }
+        }
+        Ok(())
     }
 }
 
