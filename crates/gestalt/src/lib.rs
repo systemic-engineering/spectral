@@ -16,12 +16,20 @@
 //! ### New block types
 //! - `form` — interactive form fields (TextField, DateField, CurrencyField, CheckboxField, SignatureField)
 //! - `spectral` — eigenvalue visualization blocks (EigenvalueProfile, LossHeatmap, MixingFader, TournamentBracket, CouplingGraph)
+//!
+//! ### Auto-detection (gestalt sees every repo)
+//! - `detect` — file grammar auto-detection and directory walking
+//! - `graph` — concept graph from detected files (directory-level nodes, edges)
+//! - `eigenvalue` — eigenvalue decomposition for spectral fingerprints
 
+pub mod detect;
 pub mod document;
 pub mod dom;
 pub mod domain;
+pub mod eigenvalue;
 pub mod encode;
 pub mod form;
+pub mod graph;
 pub mod panel;
 pub mod semantic;
 pub mod spectral;

@@ -115,6 +115,17 @@ pub fn builtin_tool_definitions() -> Vec<Value> {
             "description": "Inspect the peer's self-knowledge: per-file loss breakdown, self-loss metric, and proposal acceptance stats. The honest gutter in data form.",
             "inputSchema": { "type": "object", "properties": {} }
         }),
+        json!({
+            "name": "gestalt_detect",
+            "description": "Run gestalt auto-detection on a directory. Returns file counts by type, concept graph summary, and eigenvalue profile (spectral fingerprint). Works on any repo, no .mirror files required.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Directory path to analyze" }
+                },
+                "required": ["path"]
+            }
+        }),
     ]
 }
 
@@ -182,6 +193,7 @@ mod tests {
         assert!(names.contains(&"memory_crystallize"));
         assert!(names.contains(&"memory_status"));
         assert!(names.contains(&"spectral_loss"));
+        assert!(names.contains(&"gestalt_detect"));
     }
 
     #[test]

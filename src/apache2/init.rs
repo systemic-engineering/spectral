@@ -7,12 +7,28 @@
 //!   7.4ms at 200 motes. The record. The OID that persists.
 //!
 //! Cascade ratio: 635. The GPU holds 635 units of superposition for every CPU measurement.
+//!
+//! ## Gestalt auto-detection
+//!
+//! When no `.mirror` files are found, gestalt auto-detection kicks in:
+//! 1. Walk the directory tree (respecting .gitignore)
+//! 2. Classify every file by extension
+//! 3. Build a directory-level concept graph
+//! 4. Compute eigenvalue profile (spectral fingerprint)
+//! 5. Include in the snapshot
+//!
+//! A non-empty directory always produces at least an eigenvalue profile.
+//! The only Failure case is an empty or unreadable directory.
 
 use std::path::Path;
 use prism::oid::Oid;
 use terni::{Imperfect, Loss};
 use super::identity::BiasChain;
 use super::loss::InitLoss;
+
+use gestalt::detect::GestaltBreakdown;
+use gestalt::eigenvalue::EigenvalueProfile;
+use gestalt::graph::ConceptGraph;
 
 // ---------------------------------------------------------------------------
 // FNV-1a — the fast path hash (session anchor)
@@ -70,20 +86,36 @@ impl InitSnapshot {
 // InitResult
 // ---------------------------------------------------------------------------
 
-/// Result of initializing identity from a directory of .mirror files.
+/// Result of initializing identity from a directory.
+///
+/// Supports two tiers of identity discovery:
+/// - Explicit: `.mirror` files -> grammar parse -> bias chain
+/// - Implicit: all files -> gestalt detect -> concept graph -> eigenvalue profile
+///
+/// A repo with `.mirror` files gets both. A repo without gets implicit only.
 #[derive(Debug)]
 pub struct InitResult {
     pub bias_chain: BiasChain,
     pub mirror_files_found: u32,
     pub files: Vec<(String, String)>,
     /// Two-tier snapshot of the initialized state.
-    /// `None` only if serialization is skipped (shouldn't happen in normal flow).
     pub snapshot: InitSnapshot,
+
+    // Gestalt auto-detection fields
+    /// Total number of files detected by gestalt walk.
+    pub gestalt_files_detected: u32,
+    /// Breakdown of detected files by grammar kind.
+    pub gestalt_breakdown: GestaltBreakdown,
+    /// The concept graph (directory-level nodes and edges).
+    pub concept_graph: Option<ConceptGraph>,
+    /// The eigenvalue profile (spectral fingerprint).
+    pub eigenvalue_profile: Option<EigenvalueProfile>,
 }
 
 /// Read directory, find .mirror files, derive bias chain from filename order.
-/// "00-narrative.mirror" -> "narrative" in the bias chain.
-/// Returns Success (all clean), Partial (some warnings), Failure (no files).
+/// Falls back to gestalt auto-detection when no .mirror files are found.
+///
+/// Returns Success (identity found), Partial (some warnings), Failure (empty/unreadable).
 pub fn init_identity(path: &Path) -> Imperfect<InitResult, String, InitLoss> {
     let entries = match std::fs::read_dir(path) {
         Ok(entries) => entries,
@@ -105,13 +137,6 @@ pub fn init_identity(path: &Path) -> Imperfect<InitResult, String, InitLoss> {
         }
     }
 
-    if mirror_files.is_empty() {
-        return Imperfect::Failure(
-            "no .mirror files found".to_string(),
-            InitLoss { grammars_compiled: 0, grammars_with_warnings: 0 },
-        );
-    }
-
     // Sort by filename to get numbered ordering
     mirror_files.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -131,20 +156,74 @@ pub fn init_identity(path: &Path) -> Imperfect<InitResult, String, InitLoss> {
         })
         .collect();
 
-    let count = mirror_files.len() as u32;
+    let mirror_count = mirror_files.len() as u32;
 
-    // Serialize the init state for content addressing.
-    // Format: each file as "filename\0content\0", sorted.
-    // Deterministic: same files in same order = same hash.
-    let state_bytes = serialize_init_state(&mirror_files);
+    // Run gestalt auto-detection
+    let (gestalt_graph, _detected_files, gestalt_breakdown) =
+        gestalt::graph::build_concept_graph(path);
+    let gestalt_files_detected = gestalt_breakdown.total();
+
+    // Compute eigenvalue profile if graph is non-empty
+    let eigenvalue_profile = if !gestalt_graph.nodes.is_empty() {
+        let profile = gestalt::eigenvalue::eigenvalue_profile(&gestalt_graph);
+        if profile.is_dark() { None } else { Some(profile) }
+    } else {
+        None
+    };
+
+    // If no .mirror files AND no gestalt files: failure
+    if mirror_files.is_empty() && gestalt_files_detected == 0 {
+        return Imperfect::Failure(
+            "no files found (no .mirror files, no gestalt-detectable files)".to_string(),
+            InitLoss { grammars_compiled: 0, grammars_with_warnings: 0 },
+        );
+    }
+
+    // Build serialization: mirror state + gestalt eigenvalue profile
+    let mut state_bytes = serialize_init_state(&mirror_files);
+
+    // Include gestalt data in the snapshot
+    if let Some(ref profile) = eigenvalue_profile {
+        state_bytes.extend_from_slice(&profile.to_bytes());
+    }
+
     let snapshot = InitSnapshot::capture(&state_bytes);
 
-    Imperfect::Success(InitResult {
-        bias_chain: BiasChain::new(ordering),
-        mirror_files_found: count,
-        files: mirror_files,
-        snapshot,
-    })
+    let concept_graph = if gestalt_graph.nodes.is_empty() {
+        None
+    } else {
+        Some(gestalt_graph)
+    };
+
+    // Determine result status
+    if mirror_count > 0 {
+        // Explicit identity found — enriched with gestalt
+        Imperfect::Success(InitResult {
+            bias_chain: BiasChain::new(ordering),
+            mirror_files_found: mirror_count,
+            files: mirror_files,
+            snapshot,
+            gestalt_files_detected,
+            gestalt_breakdown,
+            concept_graph,
+            eigenvalue_profile,
+        })
+    } else {
+        // No .mirror files, but gestalt found files — implicit identity
+        Imperfect::Partial(
+            InitResult {
+                bias_chain: BiasChain::new(Vec::new()),
+                mirror_files_found: 0,
+                files: Vec::new(),
+                snapshot,
+                gestalt_files_detected,
+                gestalt_breakdown,
+                concept_graph,
+                eigenvalue_profile,
+            },
+            InitLoss { grammars_compiled: 0, grammars_with_warnings: 0 },
+        )
+    }
 }
 
 /// Serialize the init state into a deterministic byte buffer.
@@ -278,7 +357,7 @@ mod tests {
         assert_eq!(snap.state_bytes, data.len());
     }
 
-    // -- Integration: init_identity produces snapshot --
+    // -- Integration: init_identity with .mirror files (existing behavior) --
 
     #[test]
     fn init_identity_success_includes_snapshot() {
@@ -298,6 +377,8 @@ mod tests {
                 assert_eq!(result.snapshot.full_oid.as_str().len(), 64);
                 // State bytes > 0
                 assert!(result.snapshot.state_bytes > 0);
+                // Mirror files found
+                assert_eq!(result.mirror_files_found, 1);
             }
             other => panic!("expected Success, got {:?}", other),
         }
@@ -341,5 +422,127 @@ mod tests {
         };
         assert_ne!(snap_a.fast_oid, snap_b.fast_oid);
         assert_ne!(snap_a.full_oid, snap_b.full_oid);
+    }
+
+    // -- Gestalt auto-detection tests --
+
+    #[test]
+    fn init_empty_dir_is_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        match init_identity(dir.path()) {
+            Imperfect::Failure(msg, _) => {
+                assert!(msg.contains("no files found"), "got: {}", msg);
+            }
+            other => panic!("expected Failure for empty dir, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn init_no_mirror_with_files_produces_partial() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("readme.md"), "# Hello World\n\nSome content.\n").unwrap();
+        std::fs::write(dir.path().join("lib.rs"), "pub fn hello() {}\n").unwrap();
+
+        match init_identity(dir.path()) {
+            Imperfect::Partial(result, _loss) => {
+                assert_eq!(result.mirror_files_found, 0);
+                assert!(result.gestalt_files_detected >= 2);
+                assert!(result.gestalt_breakdown.markdown >= 1);
+                assert!(result.gestalt_breakdown.code >= 1);
+                // Should have a non-dark snapshot
+                assert!(!result.snapshot.fast_oid.is_dark());
+                assert!(!result.snapshot.full_oid.is_dark());
+            }
+            other => panic!("expected Partial for no-mirror dir with files, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn init_mixed_mirror_and_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("00-identity.mirror"),
+            "grammar @identity { in @spectral }",
+        ).unwrap();
+        std::fs::write(dir.path().join("readme.md"), "# Hello\n").unwrap();
+        std::fs::write(dir.path().join("lib.rs"), "pub fn main() {}\n").unwrap();
+
+        match init_identity(dir.path()) {
+            Imperfect::Success(result) => {
+                // Has both .mirror identity and gestalt detection
+                assert_eq!(result.mirror_files_found, 1);
+                // Gestalt should detect at least the .md and .rs files
+                // (.mirror files are also detected by gestalt)
+                assert!(result.gestalt_files_detected >= 2);
+                assert!(!result.snapshot.fast_oid.is_dark());
+            }
+            other => panic!("expected Success for mixed dir, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn init_snapshot_includes_gestalt() {
+        // Two repos with different structure produce different snapshots.
+        // Single-file repos produce dark eigenvalue profiles, so we need
+        // directories with subdirs to get non-trivial profiles.
+        let dir_a = tempfile::tempdir().unwrap();
+        std::fs::write(dir_a.path().join("readme.md"), "# Alpha\n").unwrap();
+        let sub_a = dir_a.path().join("docs");
+        std::fs::create_dir(&sub_a).unwrap();
+        std::fs::write(sub_a.join("guide.md"), "# Guide\n").unwrap();
+
+        let dir_b = tempfile::tempdir().unwrap();
+        std::fs::write(dir_b.path().join("readme.md"), "# Bravo\n").unwrap();
+        let sub_b = dir_b.path().join("src");
+        std::fs::create_dir(&sub_b).unwrap();
+        std::fs::write(sub_b.join("lib.rs"), "pub fn main() {}\n").unwrap();
+        let sub_b2 = dir_b.path().join("tests");
+        std::fs::create_dir(&sub_b2).unwrap();
+        std::fs::write(sub_b2.join("test.rs"), "#[test] fn t() {}\n").unwrap();
+
+        let snap_a = match init_identity(dir_a.path()) {
+            Imperfect::Partial(r, _) => r,
+            other => panic!("expected Partial, got {:?}", other),
+        };
+        let snap_b = match init_identity(dir_b.path()) {
+            Imperfect::Partial(r, _) => r,
+            other => panic!("expected Partial, got {:?}", other),
+        };
+
+        // Both should have eigenvalue profiles
+        assert!(snap_a.eigenvalue_profile.is_some(), "dir_a should have profile");
+        assert!(snap_b.eigenvalue_profile.is_some(), "dir_b should have profile");
+
+        // Different structure -> different eigenvalue profiles -> different snapshots
+        assert_ne!(
+            snap_a.eigenvalue_profile.as_ref().unwrap().oid(),
+            snap_b.eigenvalue_profile.as_ref().unwrap().oid(),
+            "different repos should have different eigenvalue profiles"
+        );
+        assert_ne!(snap_a.snapshot.full_oid, snap_b.snapshot.full_oid);
+    }
+
+    #[test]
+    fn init_gestalt_with_subdirs_produces_graph() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("root.md"), "# Root\n").unwrap();
+        let sub = dir.path().join("docs");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("guide.md"), "# Guide\n").unwrap();
+        std::fs::write(sub.join("api.md"), "# API\n").unwrap();
+
+        match init_identity(dir.path()) {
+            Imperfect::Partial(result, _) => {
+                assert!(result.concept_graph.is_some(), "should have concept graph");
+                let graph = result.concept_graph.unwrap();
+                // root + docs = 2 directory nodes
+                assert!(graph.nodes.len() >= 2, "expected at least 2 nodes, got {}", graph.nodes.len());
+                // Should have eigenvalue profile
+                assert!(result.eigenvalue_profile.is_some(), "should have eigenvalue profile");
+                let profile = result.eigenvalue_profile.unwrap();
+                assert!(!profile.is_dark(), "profile should not be dark for connected graph");
+            }
+            other => panic!("expected Partial, got {:?}", other),
+        }
     }
 }

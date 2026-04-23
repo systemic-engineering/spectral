@@ -77,8 +77,8 @@ fn main() {
             let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
             let target = Path::new(path);
 
-            // Phase 1: identity observation via .mirror files (apache2 layer)
-            let snapshot = match spectral::apache2::init::init_identity(target) {
+            // Phase 1: identity observation via .mirror files + gestalt auto-detection
+            let (snapshot, eigenvalue_profile) = match spectral::apache2::init::init_identity(target) {
                 terni::Imperfect::Success(result) => {
                     eprintln!("spectral init: {} grammars compiled", result.mirror_files_found);
                     eprintln!("  bias chain: {}", result.bias_chain.ordering().join(" => "));
@@ -86,19 +86,50 @@ fn main() {
                     eprintln!("  full oid:   {}", result.snapshot.full_oid);
                     eprintln!("  state:      {} bytes", result.snapshot.state_bytes);
                     eprintln!("  holonomy: 0.000 (crystal)");
-                    Some(result.snapshot)
+                    // Gestalt auto-detection enrichment
+                    if result.gestalt_files_detected > 0 {
+                        eprintln!("  gestalt:    {} files (md:{} code:{} config:{} asset:{} other:{})",
+                            result.gestalt_files_detected,
+                            result.gestalt_breakdown.markdown,
+                            result.gestalt_breakdown.code,
+                            result.gestalt_breakdown.config,
+                            result.gestalt_breakdown.asset,
+                            result.gestalt_breakdown.other,
+                        );
+                        if let Some(ref graph) = result.concept_graph {
+                            eprintln!("  graph:      {} nodes, {} edges",
+                                graph.nodes.len(), graph.edges.len());
+                        }
+                        if let Some(ref profile) = result.eigenvalue_profile {
+                            eprintln!("  eigenvalue: fiedler={:.4}", profile.fiedler_value());
+                        }
+                    }
+                    (Some(result.snapshot), result.eigenvalue_profile)
                 }
-                terni::Imperfect::Partial(result, loss) => {
-                    eprintln!("spectral init: {} grammars ({} with warnings)",
-                        result.mirror_files_found, loss.grammars_with_warnings);
-                    eprintln!("  bias chain: {}", result.bias_chain.ordering().join(" => "));
+                terni::Imperfect::Partial(result, _loss) => {
+                    // Gestalt-only identity (no .mirror files)
+                    eprintln!("spectral init: gestalt auto-detection ({} files)", result.gestalt_files_detected);
+                    eprintln!("  breakdown:  md:{} code:{} config:{} asset:{} other:{}",
+                        result.gestalt_breakdown.markdown,
+                        result.gestalt_breakdown.code,
+                        result.gestalt_breakdown.config,
+                        result.gestalt_breakdown.asset,
+                        result.gestalt_breakdown.other,
+                    );
+                    if let Some(ref graph) = result.concept_graph {
+                        eprintln!("  graph:      {} nodes, {} edges",
+                            graph.nodes.len(), graph.edges.len());
+                    }
+                    if let Some(ref profile) = result.eigenvalue_profile {
+                        eprintln!("  eigenvalue: fiedler={:.4}", profile.fiedler_value());
+                    }
                     eprintln!("  fast oid:   {}", result.snapshot.fast_oid);
                     eprintln!("  full oid:   {}", result.snapshot.full_oid);
-                    Some(result.snapshot)
+                    (Some(result.snapshot), result.eigenvalue_profile)
                 }
-                terni::Imperfect::Failure(_, _) => {
-                    // No .mirror files — not an error, just no identity to observe yet
-                    None
+                terni::Imperfect::Failure(msg, _) => {
+                    eprintln!("spectral init: {}", msg);
+                    (None, None)
                 }
             };
 
@@ -111,7 +142,7 @@ fn main() {
                 }
             }
 
-            // Phase 3: write two-tier snapshot to .spectral/
+            // Phase 3: write two-tier snapshot + eigenvalue profile to .spectral/
             if let Some(snap) = snapshot {
                 let spectral_dir = target.join(".spectral");
                 // Fast hash = session anchor. Updates on every spectral operation.
@@ -121,6 +152,17 @@ fn main() {
                 // Full hash = identity anchor. Updates on crystallization events.
                 if let Err(e) = std::fs::write(spectral_dir.join("full_oid"), snap.full_oid.as_str()) {
                     eprintln!("spectral: failed to write full_oid: {}", e);
+                }
+                // Eigenvalue profile = spectral fingerprint.
+                if let Some(ref profile) = eigenvalue_profile {
+                    let profile_str = profile.values
+                        .iter()
+                        .map(|v| format!("{:.8}", v))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if let Err(e) = std::fs::write(spectral_dir.join("eigenvalue_profile"), &profile_str) {
+                        eprintln!("spectral: failed to write eigenvalue_profile: {}", e);
+                    }
                 }
             }
 

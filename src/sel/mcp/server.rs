@@ -123,6 +123,7 @@ async fn dispatch_tool(name: &str, arguments: &Value, state: &McpState) -> Value
         "memory_recall" => dispatch_memory_recall(arguments, state).await,
         "memory_crystallize" => dispatch_memory_crystallize(state).await,
         "spectral_loss" => dispatch_spectral_loss(state).await,
+        "gestalt_detect" => dispatch_gestalt_detect(arguments).await,
         _ => tool_result_error(&format!("{}: unknown tool", name)),
     }
 }
@@ -237,6 +238,50 @@ fn format_loss_report(report: &LossReport) -> Value {
                 file.luminosity.as_str(),
             ));
         }
+    }
+
+    tool_result_text(&lines.join("\n"))
+}
+
+/// gestalt_detect — run gestalt auto-detection on a directory
+async fn dispatch_gestalt_detect(arguments: &Value) -> Value {
+    let path_str = match arguments.get("path").and_then(|v| v.as_str()) {
+        Some(p) => p,
+        None => return tool_result_error("gestalt_detect: missing 'path' argument"),
+    };
+    let path = std::path::Path::new(path_str);
+    if !path.is_dir() {
+        return tool_result_error(&format!("gestalt_detect: '{}' is not a directory", path_str));
+    }
+
+    let (graph, _files, breakdown) = gestalt::graph::build_concept_graph(path);
+    let profile = gestalt::eigenvalue::eigenvalue_profile(&graph);
+
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "total: {} files (md:{} code:{} config:{} asset:{} gestalt:{} mirror:{} other:{})",
+        breakdown.total(),
+        breakdown.markdown,
+        breakdown.code,
+        breakdown.config,
+        breakdown.asset,
+        breakdown.gestalt_native,
+        breakdown.mirror,
+        breakdown.other,
+    ));
+    lines.push(format!("graph: {} nodes, {} edges", graph.nodes.len(), graph.edges.len()));
+
+    if !profile.is_dark() {
+        lines.push(format!("fiedler: {:.4}", profile.fiedler_value()));
+        let profile_str: String = profile.values
+            .iter()
+            .map(|v| format!("{:.4}", v))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("eigenvalues: [{}]", profile_str));
+        lines.push(format!("profile_oid: {}", profile.oid()));
+    } else {
+        lines.push("profile: dark (no connectivity)".to_string());
     }
 
     tool_result_text(&lines.join("\n"))
