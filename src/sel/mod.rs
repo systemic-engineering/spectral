@@ -14,6 +14,7 @@ pub mod training;
 pub mod pipeline;
 #[cfg(test)]
 mod nl_integration_test;
+pub mod hooks;
 pub mod mcp;
 #[cfg(test)]
 mod e2e_tests;
