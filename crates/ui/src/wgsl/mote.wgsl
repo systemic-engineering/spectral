@@ -1,25 +1,30 @@
 // mote.wgsl — Radial gradient circle shader with additive blending.
-// One quad (2 triangles, 6 vertices) is emitted per mote.
-// The vertex shader expands each mote to cover its glow_radius extent.
-// The fragment shader computes the radial gradient.
+// One quad (2 triangles, 6 vertices) is emitted per mote via vertex_index.
+// Data comes from a storage buffer — no vertex buffer needed.
+//
+// MoteData layout (std430):
+//   offset  0: position    vec2<f32>  (8 bytes)
+//   offset  8: radius      f32        (4 bytes)
+//   offset 12: glow_radius f32        (4 bytes)
+//   offset 16: color       vec4<f32>  (16 bytes)
+//   offset 32: energy      f32        (4 bytes)
+//   offset 36: _pad0..2    f32 × 3   (12 bytes)
+//   total: 48 bytes. struct align = 16. 48 = 3 × 16.
 
-// Layout: std430 rules for storage buffers.
-// vec2<f32>=align8/size8, f32=align4/size4, vec4<f32>=align16/size16
-// Total: 8+4+4+16+4+4+4+4 = 48 bytes. Struct align=16. 48 = 3×16. OK.
 struct MoteData {
-    position:    vec2<f32>,  // offset  0, size  8
-    radius:      f32,        // offset  8, size  4
-    glow_radius: f32,        // offset 12, size  4
-    color:       vec4<f32>,  // offset 16, size 16
-    energy:      f32,        // offset 32, size  4
-    _pad0:       f32,        // offset 36, size  4
-    _pad1:       f32,        // offset 40, size  4
-    _pad2:       f32,        // offset 44, size  4 → total 48
+    position:    vec2<f32>,
+    radius:      f32,
+    glow_radius: f32,
+    color:       vec4<f32>,
+    energy:      f32,
+    _pad0:       f32,
+    _pad1:       f32,
+    _pad2:       f32,
 }
 
 struct VertexOut {
     @builtin(position) clip_pos: vec4<f32>,
-    @location(0) frag_pos:       vec2<f32>, // position within the quad in [-1,1] NDC
+    @location(0) frag_pos:       vec2<f32>,
     @location(1) mote_center:    vec2<f32>,
     @location(2) radius:         f32,
     @location(3) glow_radius:    f32,
@@ -40,15 +45,10 @@ var<private> QUAD: array<vec2<f32>, 6> = array<vec2<f32>, 6>(
 @group(0) @binding(0) var<storage, read> motes: array<MoteData>;
 
 @vertex
-fn vs_main(
-    @builtin(vertex_index) vert_idx: u32,
-) -> VertexOut {
-    let mote_idx = vert_idx / 6u;
-    let corner_idx = vert_idx % 6u;
-    let m = motes[mote_idx];
-
-    let corner = QUAD[corner_idx];
-    // Scale the quad to cover the glow radius
+fn vs_main(@builtin(vertex_index) vert_idx: u32) -> VertexOut {
+    let mote_idx  = vert_idx / 6u;
+    let corner    = QUAD[vert_idx % 6u];
+    let m         = motes[mote_idx];
     let world_pos = m.position + corner * m.glow_radius;
 
     var out: VertexOut;
@@ -66,7 +66,6 @@ fn vs_main(
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let dist = length(in.frag_pos - in.mote_center);
 
-    // Discard fragments entirely outside the glow radius
     if dist > in.glow_radius {
         discard;
     }
@@ -78,6 +77,6 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     let alpha = max(inner, glow * 0.4) * in.energy;
 
-    // Premultiplied alpha for additive blending
+    // Pre-multiplied alpha for additive blending
     return vec4<f32>(in.color.rgb * alpha, alpha);
 }
