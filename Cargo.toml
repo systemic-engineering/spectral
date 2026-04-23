@@ -4,6 +4,7 @@ members = [
     ".",
     "crates/witness-rs",
     "crates/gestalt",
+    "crates/ui",
 ]
 
 [workspace.dependencies]
