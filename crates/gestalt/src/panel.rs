@@ -47,22 +47,18 @@ mod tests {
 
     #[test]
     fn panel_different_state_different_output() {
-        use prism_core::oid::Addressable;
-
         let panel = CounterPanel;
         let a = panel.render(&1);
         let b = panel.render(&2);
-        assert_ne!(a.oid(), b.oid());
+        assert_ne!(a.node_oid(), b.node_oid());
     }
 
     #[test]
     fn panel_same_state_same_output() {
-        use prism_core::oid::Addressable;
-
         let panel = CounterPanel;
         let a = panel.render(&5);
         let b = panel.render(&5);
-        assert_eq!(a.oid(), b.oid());
+        assert_eq!(a.node_oid(), b.node_oid());
     }
 
     struct ListPanel;

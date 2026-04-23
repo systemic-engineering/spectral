@@ -1,10 +1,42 @@
-//! Virtual DOM — content-addressed tree diffing.
+//! DOM — vocabulary-agnostic content tree + virtual DOM diffing.
 //!
-//! A Node is a tree element with tag, attributes, children, and optional text.
-//! Nodes are content-addressed via Oid. Diffing two trees produces a Vec<Patch>
-//! describing the minimal edits.
+//! Two layers in one module:
+//!
+//! 1. `DOM` trait — the vocabulary-agnostic interface. Any content tree
+//!    implements this: gestalt documents, forms, spectral visualizations.
+//!    Four methods: uri(), attributes(), content(), oid().
+//!
+//! 2. `Node` — the virtual DOM. A renderable, diffable tree element.
+//!    Implements `DOM`. Content-addressed via Oid. Diffing produces `Vec<Patch>`.
 
+use crate::semantic::Meta;
 use prism_core::oid::{Addressable, Oid};
+
+// ---------------------------------------------------------------------------
+// DOM trait — the vocabulary-agnostic content tree interface
+// ---------------------------------------------------------------------------
+
+/// The tree trait. Every node is queryable and content-addressable.
+///
+/// Vocabulary-agnostic: gestalt documents, forms, spectral visualizations —
+/// all implement DOM. The trait operates on four axes:
+/// - Identity: what this node IS in its vocabulary (uri)
+/// - Metadata: semantic annotations (attributes)
+/// - Structure: child nodes (content)
+/// - Content address: same content = same Oid (oid)
+pub trait DOM {
+    /// Structural address. Identifies what this node IS in its vocabulary.
+    fn uri(&self) -> String;
+
+    /// Metadata on this node.
+    fn attributes(&self) -> &[Meta];
+
+    /// Child DOM nodes. Containers return children, leaves return empty.
+    fn content(&self) -> Vec<&dyn DOM>;
+
+    /// Content-addressed identity. Same content = same Oid.
+    fn oid(&self) -> Oid;
+}
 
 /// A DOM node. Content-addressed.
 #[derive(Clone, Debug, PartialEq)]
@@ -35,21 +67,31 @@ impl Node {
             text: Some(content.into()),
         }
     }
+
+    /// Content-addressed identity. Same structure = same Oid.
+    /// This is a direct method to avoid ambiguity with Addressable::oid() and DOM::oid().
+    pub fn node_oid(&self) -> Oid {
+        compute_node_oid(self)
+    }
+}
+
+fn compute_node_oid(node: &Node) -> Oid {
+    let mut content = format!("node:{}", node.tag);
+    for (k, v) in &node.attributes {
+        content.push_str(&format!(":{}={}", k, v));
+    }
+    for child in &node.children {
+        content.push_str(&format!(":{}", compute_node_oid(child)));
+    }
+    if let Some(ref t) = node.text {
+        content.push_str(&format!(":text={}", t));
+    }
+    Oid::hash(content.as_bytes())
 }
 
 impl Addressable for Node {
     fn oid(&self) -> Oid {
-        let mut content = format!("node:{}", self.tag);
-        for (k, v) in &self.attributes {
-            content.push_str(&format!(":{}={}", k, v));
-        }
-        for child in &self.children {
-            content.push_str(&format!(":{}", child.oid()));
-        }
-        if let Some(ref t) = self.text {
-            content.push_str(&format!(":text={}", t));
-        }
-        Oid::hash(content.as_bytes())
+        compute_node_oid(self)
     }
 }
 
@@ -72,14 +114,14 @@ pub enum Patch {
 ///
 /// Uses Oid comparison for fast path: same Oid = identical subtree = skip.
 pub fn diff(old: &Node, new: &Node) -> Vec<Patch> {
-    if old.oid() == new.oid() {
+    if compute_node_oid(old) == compute_node_oid(new) {
         return Vec::new();
     }
     diff_at(old, new, 0)
 }
 
 fn diff_at(old: &Node, new: &Node, index: usize) -> Vec<Patch> {
-    if old.oid() == new.oid() {
+    if compute_node_oid(old) == compute_node_oid(new) {
         return Vec::new();
     }
 
@@ -127,6 +169,34 @@ fn diff_at(old: &Node, new: &Node, index: usize) -> Vec<Patch> {
 }
 
 // ---------------------------------------------------------------------------
+// DOM impl for Node
+// ---------------------------------------------------------------------------
+
+impl DOM for Node {
+    fn uri(&self) -> String {
+        if self.tag.is_empty() {
+            "#text".to_string()
+        } else {
+            format!("node:{}", self.tag)
+        }
+    }
+
+    fn attributes(&self) -> &[Meta] {
+        // Render nodes carry no semantic Meta — attributes are in `self.attributes`.
+        // DOM trait attributes() returns semantic metadata. Render nodes have none.
+        &[]
+    }
+
+    fn content(&self) -> Vec<&dyn DOM> {
+        self.children.iter().map(|c| c as &dyn DOM).collect()
+    }
+
+    fn oid(&self) -> Oid {
+        compute_node_oid(self)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -153,28 +223,28 @@ mod tests {
     fn node_is_content_addressed() {
         let a = Node::element("div", vec![], vec![]);
         let b = Node::element("div", vec![], vec![]);
-        assert_eq!(a.oid(), b.oid());
+        assert_eq!(a.node_oid(), b.node_oid());
     }
 
     #[test]
     fn different_tag_different_oid() {
         let a = Node::element("div", vec![], vec![]);
         let b = Node::element("span", vec![], vec![]);
-        assert_ne!(a.oid(), b.oid());
+        assert_ne!(a.node_oid(), b.node_oid());
     }
 
     #[test]
     fn different_attrs_different_oid() {
         let a = Node::element("div", vec![("class".into(), "a".into())], vec![]);
         let b = Node::element("div", vec![("class".into(), "b".into())], vec![]);
-        assert_ne!(a.oid(), b.oid());
+        assert_ne!(a.node_oid(), b.node_oid());
     }
 
     #[test]
     fn different_children_different_oid() {
         let a = Node::element("div", vec![], vec![Node::text("a")]);
         let b = Node::element("div", vec![], vec![Node::text("b")]);
-        assert_ne!(a.oid(), b.oid());
+        assert_ne!(a.node_oid(), b.node_oid());
     }
 
     #[test]
@@ -238,6 +308,42 @@ mod tests {
         assert!(!patches.is_empty());
         // The child text changed, so we get an UpdateText patch
         assert!(patches.iter().any(|p| matches!(p, Patch::UpdateText(_, _))));
+    }
+
+    #[test]
+    fn node_implements_dom_uri() {
+        let node = Node::element("div", vec![], vec![]);
+        let dom: &dyn DOM = &node;
+        assert_eq!(dom.uri(), "node:div");
+    }
+
+    #[test]
+    fn text_node_implements_dom_uri() {
+        let node = Node::text("hello");
+        let dom: &dyn DOM = &node;
+        assert_eq!(dom.uri(), "#text");
+    }
+
+    #[test]
+    fn node_dom_content_returns_children() {
+        let parent = Node::element("div", vec![], vec![Node::text("a"), Node::text("b")]);
+        let dom: &dyn DOM = &parent;
+        assert_eq!(dom.content().len(), 2);
+    }
+
+    #[test]
+    fn node_dom_attributes_empty_for_render_node() {
+        let node = Node::element("div", vec![("class".into(), "foo".into())], vec![]);
+        let dom: &dyn DOM = &node;
+        // Render nodes have no semantic Meta
+        assert!(dom.attributes().is_empty());
+    }
+
+    #[test]
+    fn node_dom_oid_consistent_with_addressable() {
+        let node = Node::element("div", vec![], vec![]);
+        let dom: &dyn DOM = &node;
+        assert_eq!(dom.oid(), node.node_oid());
     }
 
     #[test]
