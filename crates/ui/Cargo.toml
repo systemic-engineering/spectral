@@ -9,5 +9,15 @@ description = "GPU rendering layer for the spectral eigenboard — wgpu-based mo
 wgpu = { version = "22", features = ["wgsl"] }
 bytemuck = { version = "1", features = ["derive"] }
 pollster = "0.3"
+prism-core = { workspace = true }
 
 [dev-dependencies]
+divan = "0.1"
+
+[[bench]]
+name = "eigenboard"
+harness = false
+
+[[bench]]
+name = "superposition"
+harness = false
