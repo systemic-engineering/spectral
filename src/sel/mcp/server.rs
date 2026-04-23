@@ -203,8 +203,43 @@ async fn dispatch_memory_crystallize(state: &McpState) -> Value {
 }
 
 /// spectral_loss → LspActor::GetLossReport
-async fn dispatch_spectral_loss(_state: &McpState) -> Value {
-    todo!("tick-4: dispatch_spectral_loss")
+async fn dispatch_spectral_loss(state: &McpState) -> Value {
+    match &state.lsp {
+        Some(lsp_ref) => {
+            match ractor::call!(lsp_ref, |reply| LspMsg::GetLossReport { reply }) {
+                Ok(report) => format_loss_report(&report),
+                Err(e) => tool_result_error(&format!("spectral_loss failed: {}", e)),
+            }
+        }
+        None => tool_result_text("spectral_loss: LSP actor not connected (no loss data available)"),
+    }
+}
+
+/// Format a LossReport into MCP tool result text.
+fn format_loss_report(report: &LossReport) -> Value {
+    let mut lines = Vec::new();
+
+    lines.push(format!(
+        "self_loss: {:.4} bits (proposals: {}, accepted: {}, rejected: {})",
+        report.self_loss, report.proposal_count, report.accepted_count, report.rejected_count
+    ));
+
+    if report.files.is_empty() {
+        lines.push("no files open".to_string());
+    } else {
+        lines.push(format!("files: {}", report.files.len()));
+        for file in &report.files {
+            lines.push(format!(
+                "  {} — loss: {:.1} bits, diagnostics: {}, gutter: {}",
+                file.uri,
+                file.total_loss_bits,
+                file.diagnostic_count,
+                file.luminosity.as_str(),
+            ));
+        }
+    }
+
+    tool_result_text(&lines.join("\n"))
 }
 
 // ── JSON helpers ─────────────────────────────────────────────────────

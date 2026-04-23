@@ -317,12 +317,14 @@ impl Actor for LspActor {
                 let _ = reply.send(items);
             }
 
-            LspMsg::GetCodeLenses { uri: _, reply: _ } => {
-                todo!("tick-4: compute_code_lenses")
+            LspMsg::GetCodeLenses { uri, reply } => {
+                let lenses = compute_code_lenses(state, &uri);
+                let _ = reply.send(lenses);
             }
 
-            LspMsg::GetLossReport { reply: _ } => {
-                todo!("tick-4: compute_loss_report")
+            LspMsg::GetLossReport { reply } => {
+                let report = compute_loss_report(state);
+                let _ = reply.send(report);
             }
         }
         Ok(())
