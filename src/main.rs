@@ -78,21 +78,29 @@ fn main() {
             let target = Path::new(path);
 
             // Phase 1: identity observation via .mirror files (apache2 layer)
-            match spectral::apache2::init::init_identity(target) {
+            let snapshot = match spectral::apache2::init::init_identity(target) {
                 terni::Imperfect::Success(result) => {
                     eprintln!("spectral init: {} grammars compiled", result.mirror_files_found);
                     eprintln!("  bias chain: {}", result.bias_chain.ordering().join(" => "));
+                    eprintln!("  fast oid:   {}", result.snapshot.fast_oid);
+                    eprintln!("  full oid:   {}", result.snapshot.full_oid);
+                    eprintln!("  state:      {} bytes", result.snapshot.state_bytes);
                     eprintln!("  holonomy: 0.000 (crystal)");
+                    Some(result.snapshot)
                 }
                 terni::Imperfect::Partial(result, loss) => {
                     eprintln!("spectral init: {} grammars ({} with warnings)",
                         result.mirror_files_found, loss.grammars_with_warnings);
                     eprintln!("  bias chain: {}", result.bias_chain.ordering().join(" => "));
+                    eprintln!("  fast oid:   {}", result.snapshot.fast_oid);
+                    eprintln!("  full oid:   {}", result.snapshot.full_oid);
+                    Some(result.snapshot)
                 }
                 terni::Imperfect::Failure(_, _) => {
                     // No .mirror files — not an error, just no identity to observe yet
+                    None
                 }
-            }
+            };
 
             // Phase 2: session directory (.spectral/)
             match session::Session::init(target) {
@@ -102,6 +110,20 @@ fn main() {
                     process::exit(1);
                 }
             }
+
+            // Phase 3: write two-tier snapshot to .spectral/
+            if let Some(snap) = snapshot {
+                let spectral_dir = target.join(".spectral");
+                // Fast hash = session anchor. Updates on every spectral operation.
+                if let Err(e) = std::fs::write(spectral_dir.join("fast_oid"), snap.fast_oid.as_str()) {
+                    eprintln!("spectral: failed to write fast_oid: {}", e);
+                }
+                // Full hash = identity anchor. Updates on crystallization events.
+                if let Err(e) = std::fs::write(spectral_dir.join("full_oid"), snap.full_oid.as_str()) {
+                    eprintln!("spectral: failed to write full_oid: {}", e);
+                }
+            }
+
             // Create .git/mirror/ for crystal storage
             let mirror_dir = target.join(".git/mirror");
             let git_dir = target.join(".git");

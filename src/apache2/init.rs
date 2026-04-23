@@ -76,8 +76,9 @@ pub struct InitResult {
     pub bias_chain: BiasChain,
     pub mirror_files_found: u32,
     pub files: Vec<(String, String)>,
-    // TODO: wire two-tier snapshot into InitResult
-    // pub snapshot: InitSnapshot,
+    /// Two-tier snapshot of the initialized state.
+    /// `None` only if serialization is skipped (shouldn't happen in normal flow).
+    pub snapshot: InitSnapshot,
 }
 
 /// Read directory, find .mirror files, derive bias chain from filename order.
@@ -132,10 +133,17 @@ pub fn init_identity(path: &Path) -> Imperfect<InitResult, String, InitLoss> {
 
     let count = mirror_files.len() as u32;
 
+    // Serialize the init state for content addressing.
+    // Format: each file as "filename\0content\0", sorted.
+    // Deterministic: same files in same order = same hash.
+    let state_bytes = serialize_init_state(&mirror_files);
+    let snapshot = InitSnapshot::capture(&state_bytes);
+
     Imperfect::Success(InitResult {
         bias_chain: BiasChain::new(ordering),
         mirror_files_found: count,
         files: mirror_files,
+        snapshot,
     })
 }
 
