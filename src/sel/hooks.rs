@@ -320,27 +320,113 @@ impl HookDispatcher {
     /// 6. Package into frame
     /// 7. Track latency against budget
     pub fn dispatch(&mut self, event: HookEvent) -> EigenboardFrame {
-        todo!("dispatch: event→action→frame pipeline not yet implemented")
+        let start = Instant::now();
+        self.tick += 1;
+
+        let action = Self::map_action(&event);
+        let render_hint = Self::map_render_hint(&event);
+        let snapshot_kind = Self::map_snapshot_kind(&event);
+        let topology_delta = TopologyDelta::None; // Placeholder — real delta comes from actor responses
+
+        // Snapshot OID — in production this comes from the actual field state.
+        // Here we content-address the event itself for deterministic testing.
+        let snapshot_oid = Self::event_oid(&event, self.tick);
+
+        let elapsed_us = start.elapsed().as_micros() as u64;
+
+        // Track budget overruns
+        let budget = event.budget_us();
+        if elapsed_us > budget {
+            self.overruns.push((
+                format!("{:?}", event).chars().take(50).collect(),
+                elapsed_us,
+                budget,
+            ));
+        }
+
+        self.frame_count += 1;
+
+        EigenboardFrame {
+            tick: self.tick,
+            event,
+            action,
+            topology_delta,
+            snapshot_oid,
+            snapshot_kind,
+            render_hint,
+            elapsed_us,
+        }
     }
 
     /// Map an event to its action. Pure function — no side effects.
     fn map_action(event: &HookEvent) -> HookAction {
-        todo!("map_action: event→action mapping not yet implemented")
+        match event {
+            HookEvent::Keystroke { uri } => HookAction::FocusShift {
+                uri: uri.clone(),
+            },
+            HookEvent::PromptSubmit { prompt_hash } => HookAction::TournamentFanOut {
+                prompt_hash: *prompt_hash,
+            },
+            HookEvent::SuggestionArrive { player, suggestion_oid } => HookAction::BeamReceive {
+                player: player.clone(),
+                suggestion_oid: suggestion_oid.clone(),
+            },
+            HookEvent::SuggestionAccept { suggestion_oid } => HookAction::Collapse {
+                suggestion_oid: suggestion_oid.clone(),
+            },
+            HookEvent::SuggestionReject { suggestion_oid } => HookAction::Dissipate {
+                suggestion_oid: suggestion_oid.clone(),
+            },
+            HookEvent::FileWrite { uri } => HookAction::Observe {
+                uri: uri.clone(),
+            },
+            HookEvent::GitCommit { commit_hash } => HookAction::Anchor {
+                commit_hash: commit_hash.clone(),
+            },
+            HookEvent::TestPass { count } => HookAction::Crystallize {
+                test_count: *count,
+            },
+            HookEvent::TestFail { count, summary } => HookAction::Destabilize {
+                fail_count: *count,
+                summary: summary.clone(),
+            },
+        }
     }
 
     /// Map an event to its render hint.
     fn map_render_hint(event: &HookEvent) -> RenderHint {
-        todo!("map_render_hint: event→render hint mapping not yet implemented")
+        match event {
+            HookEvent::Keystroke { .. } => RenderHint::Settle,
+            HookEvent::PromptSubmit { .. } => RenderHint::Pulse,
+            HookEvent::SuggestionArrive { .. } => RenderHint::Beam,
+            HookEvent::SuggestionAccept { .. } => RenderHint::Solidify,
+            HookEvent::SuggestionReject { .. } => RenderHint::Fade,
+            HookEvent::FileWrite { .. } => RenderHint::Pulse,
+            HookEvent::GitCommit { .. } => RenderHint::Solidify,
+            HookEvent::TestPass { .. } => RenderHint::Solidify,
+            HookEvent::TestFail { .. } => RenderHint::Flicker,
+        }
     }
 
     /// Map an event to its snapshot kind.
     fn map_snapshot_kind(event: &HookEvent) -> SnapshotKind {
-        todo!("map_snapshot_kind: event→snapshot kind mapping not yet implemented")
+        match event {
+            HookEvent::Keystroke { .. } => SnapshotKind::None,
+            HookEvent::PromptSubmit { .. } => SnapshotKind::None,
+            HookEvent::SuggestionArrive { .. } => SnapshotKind::None,
+            HookEvent::SuggestionAccept { .. } => SnapshotKind::Fast,
+            HookEvent::SuggestionReject { .. } => SnapshotKind::None,
+            HookEvent::FileWrite { .. } => SnapshotKind::Fast,
+            HookEvent::GitCommit { .. } => SnapshotKind::Full,
+            HookEvent::TestPass { .. } => SnapshotKind::Full,
+            HookEvent::TestFail { .. } => SnapshotKind::Fast,
+        }
     }
 
     /// Content-address an event for snapshot OID.
     fn event_oid(event: &HookEvent, tick: u64) -> Oid {
-        todo!("event_oid: content-addressing not yet implemented")
+        let content = format!("hook:{}:{:?}", tick, event);
+        Oid::hash(content.as_bytes())
     }
 
     /// Check if two events can overlap (execute concurrently) without frame drop.
@@ -349,7 +435,36 @@ impl HookDispatcher {
     /// Rule: events that share no mutable state can overlap.
     /// Events that both write to topology CANNOT overlap.
     pub fn can_overlap(a: &HookEvent, b: &HookEvent) -> bool {
-        todo!("can_overlap: overlap analysis not yet implemented")
+        match (a, b) {
+            // Keystroke overlaps with everything except another keystroke to same file
+            (HookEvent::Keystroke { uri: u1 }, HookEvent::Keystroke { uri: u2 }) => u1 != u2,
+            (HookEvent::Keystroke { .. }, _) | (_, HookEvent::Keystroke { .. }) => true,
+
+            // Suggestion arrive can overlap with other arrives (different players)
+            (
+                HookEvent::SuggestionArrive { player: p1, .. },
+                HookEvent::SuggestionArrive { player: p2, .. },
+            ) => p1 != p2,
+
+            // Accept/reject CANNOT overlap with file-write (both mutate topology)
+            (HookEvent::SuggestionAccept { .. }, HookEvent::FileWrite { .. })
+            | (HookEvent::FileWrite { .. }, HookEvent::SuggestionAccept { .. }) => false,
+
+            // File-write and git-commit must be sequential
+            (HookEvent::FileWrite { .. }, HookEvent::GitCommit { .. })
+            | (HookEvent::GitCommit { .. }, HookEvent::FileWrite { .. }) => false,
+
+            // Git-commit and test-pass must be sequential (crystallize depends on anchor)
+            (HookEvent::GitCommit { .. }, HookEvent::TestPass { .. })
+            | (HookEvent::TestPass { .. }, HookEvent::GitCommit { .. }) => false,
+
+            // PromptSubmit overlaps with file-write (different subsystems)
+            (HookEvent::PromptSubmit { .. }, HookEvent::FileWrite { .. })
+            | (HookEvent::FileWrite { .. }, HookEvent::PromptSubmit { .. }) => true,
+
+            // Default: no overlap for safety
+            _ => false,
+        }
     }
 
     /// Compute the worst-case cascade latency in microseconds.
@@ -359,7 +474,19 @@ impl HookDispatcher {
     ///
     /// Returns the total sequential budget and whether it fits in one frame.
     pub fn worst_case_cascade_us() -> (u64, bool) {
-        todo!("worst_case_cascade_us: cascade analysis not yet implemented")
+        let prompt = 5_000;        // prompt-submit
+        let arrives = 5_000;       // suggestion-arrive (overlapping — count once)
+        let accept = 10_000;       // suggestion-accept
+        let file_write = 20_000;   // file-write
+        let test_pass = 100_000;   // test-pass (crystallize)
+
+        let total = prompt + arrives + accept + file_write + test_pass;
+        // At 8 ticks per frame, frame budget is 8 * 650ns = 5.2us for snapshot ticks.
+        // But the real frame budget is the 41% headroom at 200 motes.
+        // Total sequential budget: 140ms. That's multiple frames.
+        // The question is: does it complete before the NEXT prompt-submit?
+        let fits_single_frame = total < 16_667; // 60fps = 16.67ms per frame
+        (total, fits_single_frame)
     }
 
     /// How many hook events can fire per frame before budget is exceeded?
@@ -370,7 +497,13 @@ impl HookDispatcher {
     /// - Total frame time at 60fps: 16,667us
     /// - With 41% headroom: ~9,833us available for hooks per frame
     pub fn max_events_per_frame() -> (usize, u64) {
-        todo!("max_events_per_frame: frame budget analysis not yet implemented")
+        let frame_budget_us = 16_667; // 60fps
+        let headroom_ratio = 0.41;
+        let available_us = (frame_budget_us as f64 * (1.0 - headroom_ratio)) as u64;
+
+        // Keystroke is the cheapest: 2ms budget = ~4.9 keystrokes per frame
+        let keystrokes_per_frame = available_us / 2_000;
+        (keystrokes_per_frame as usize, available_us)
     }
 }
 
