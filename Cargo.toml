@@ -30,7 +30,7 @@ path = "src/main.rs"
 
 [features]
 default = []
-sel = ["dep:rustyline", "dep:colored", "dep:reqwest", "dep:tokio", "dep:ractor", "dep:fate", "dep:spectral-db", "dep:tower-lsp", "dep:dashmap"]
+sel = ["dep:rustyline", "dep:colored", "dep:reqwest", "dep:tokio", "dep:ractor", "dep:fate", "dep:spectral-db", "dep:tower-lsp", "dep:dashmap", "dep:ratatui", "dep:crossterm", "dep:image", "dep:spectral-ui"]
 
 [dependencies]
 mirror = { path = "../mirror" }
@@ -53,6 +53,12 @@ ractor = { version = "0.15", features = ["async-trait"], optional = true }
 tower-lsp = { version = "0.20", optional = true }
 dashmap = { version = "6", optional = true }
 spectral-db = { path = "../spectral-db", optional = true }
+
+# sel-gated — TUI (spectral join)
+ratatui = { version = "0.29", optional = true }
+crossterm = { version = "0.28", optional = true }
+image = { version = "0.25", optional = true }
+spectral-ui = { path = "crates/ui", optional = true }
 
 # Temporarily disabled — pending further integration
 # lens = { path = "../lens" }

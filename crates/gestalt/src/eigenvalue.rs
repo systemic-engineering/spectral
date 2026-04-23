@@ -206,6 +206,148 @@ fn jacobi_eigenvalues(matrix: &[f64], n: usize) -> Vec<f64> {
     (0..n).map(|i| a[i * n + i]).collect()
 }
 
+/// Compute eigenvalues AND eigenvectors of a real symmetric matrix using the Jacobi method.
+/// Input: row-major flat matrix, dimension n.
+/// Returns (eigenvalues, eigenvectors) where eigenvectors[i] is the eigenvector
+/// for eigenvalues[i]. Both are sorted by eigenvalue ascending.
+///
+/// The Jacobi algorithm accumulates rotation matrices. The product of all
+/// Givens rotations IS the eigenvector matrix. Column i of the product
+/// corresponds to eigenvalue i.
+pub fn jacobi_eigen_decomposition(matrix: &[f64], n: usize) -> (Vec<f64>, Vec<Vec<f64>>) {
+    if n == 0 {
+        return (Vec::new(), Vec::new());
+    }
+    if n == 1 {
+        return (vec![matrix[0]], vec![vec![1.0]]);
+    }
+
+    // Copy matrix (we modify it in place)
+    let mut a = matrix.to_vec();
+    // Eigenvector matrix: starts as identity
+    let mut v = vec![0.0_f64; n * n];
+    for i in 0..n {
+        v[i * n + i] = 1.0;
+    }
+
+    let max_iter = 100 * n * n;
+    let eps = 1e-12;
+
+    for _ in 0..max_iter {
+        // Find the largest off-diagonal element
+        let mut max_val = 0.0_f64;
+        let mut p = 0;
+        let mut q = 1;
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let val = a[i * n + j].abs();
+                if val > max_val {
+                    max_val = val;
+                    p = i;
+                    q = j;
+                }
+            }
+        }
+
+        // Convergence check
+        if max_val < eps {
+            break;
+        }
+
+        // Compute rotation angle
+        let app = a[p * n + p];
+        let aqq = a[q * n + q];
+        let apq = a[p * n + q];
+
+        let theta = if (app - aqq).abs() < eps {
+            std::f64::consts::FRAC_PI_4
+        } else {
+            0.5 * ((2.0 * apq) / (app - aqq)).atan()
+        };
+
+        let cos_t = theta.cos();
+        let sin_t = theta.sin();
+
+        // Apply Givens rotation to A
+        let mut new_a = a.clone();
+
+        for i in 0..n {
+            if i != p && i != q {
+                let aip = a[i * n + p];
+                let aiq = a[i * n + q];
+                new_a[i * n + p] = cos_t * aip + sin_t * aiq;
+                new_a[p * n + i] = new_a[i * n + p];
+                new_a[i * n + q] = -sin_t * aip + cos_t * aiq;
+                new_a[q * n + i] = new_a[i * n + q];
+            }
+        }
+
+        new_a[p * n + p] = cos_t * cos_t * app + 2.0 * cos_t * sin_t * apq + sin_t * sin_t * aqq;
+        new_a[q * n + q] = sin_t * sin_t * app - 2.0 * cos_t * sin_t * apq + cos_t * cos_t * aqq;
+        new_a[p * n + q] = 0.0;
+        new_a[q * n + p] = 0.0;
+
+        a = new_a;
+
+        // Accumulate rotation into eigenvector matrix: V = V * G
+        // G only mixes columns p and q
+        for i in 0..n {
+            let vip = v[i * n + p];
+            let viq = v[i * n + q];
+            v[i * n + p] = cos_t * vip + sin_t * viq;
+            v[i * n + q] = -sin_t * vip + cos_t * viq;
+        }
+    }
+
+    // Collect eigenvalues and eigenvectors
+    let eigenvalues: Vec<f64> = (0..n).map(|i| a[i * n + i]).collect();
+    let eigenvectors: Vec<Vec<f64>> = (0..n)
+        .map(|j| (0..n).map(|i| v[i * n + j]).collect())
+        .collect();
+
+    // Sort by eigenvalue ascending
+    let mut indices: Vec<usize> = (0..n).collect();
+    indices.sort_by(|&a, &b| eigenvalues[a].partial_cmp(&eigenvalues[b]).unwrap_or(std::cmp::Ordering::Equal));
+
+    let sorted_vals: Vec<f64> = indices.iter().map(|&i| eigenvalues[i]).collect();
+    let sorted_vecs: Vec<Vec<f64>> = indices.iter().map(|&i| eigenvectors[i].clone()).collect();
+
+    (sorted_vals, sorted_vecs)
+}
+
+/// Compute 2D spectral embedding of a concept graph.
+///
+/// Uses the Fiedler vector (eigenvector 2) as x-axis and the third eigenvector
+/// as y-axis. Returns one [f32; 2] position per node, normalized to [-1, 1].
+///
+/// For graphs with < 3 nodes, returns zero positions.
+pub fn spectral_embedding_2d(graph: &ConceptGraph) -> Vec<[f32; 2]> {
+    let n = graph.nodes.len();
+    if n < 3 {
+        return vec![[0.0, 0.0]; n];
+    }
+
+    let (laplacian, dim) = graph.laplacian_matrix();
+    let (_eigenvalues, eigenvectors) = jacobi_eigen_decomposition(&laplacian, dim);
+
+    // Eigenvector index 1 = Fiedler vector (x), index 2 = third eigenvector (y)
+    let fiedler = &eigenvectors[1];
+    let third = &eigenvectors[2];
+
+    // Find max absolute values for normalization
+    let max_x = fiedler.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+    let max_y = third.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+
+    let norm_x = if max_x > 1e-12 { max_x } else { 1.0 };
+    let norm_y = if max_y > 1e-12 { max_y } else { 1.0 };
+
+    (0..n)
+        .map(|i| {
+            [(fiedler[i] / norm_x) as f32, (third[i] / norm_y) as f32]
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -430,5 +572,155 @@ mod tests {
 
         // Should produce a non-dark profile since we have a connected graph
         assert!(!profile.is_dark(), "profile should not be dark for connected graph");
+    }
+
+    // --- jacobi_eigen_decomposition tests ---
+
+    #[test]
+    fn decomposition_empty_matrix() {
+        let (vals, vecs) = jacobi_eigen_decomposition(&[], 0);
+        assert!(vals.is_empty());
+        assert!(vecs.is_empty());
+    }
+
+    #[test]
+    fn decomposition_1x1_matrix() {
+        let (vals, vecs) = jacobi_eigen_decomposition(&[5.0], 1);
+        assert_eq!(vals.len(), 1);
+        assert!((vals[0] - 5.0).abs() < 1e-10);
+        assert_eq!(vecs.len(), 1);
+        assert!((vecs[0][0] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn decomposition_identity_3x3() {
+        let matrix = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        let (vals, vecs) = jacobi_eigen_decomposition(&matrix, 3);
+        assert_eq!(vals.len(), 3);
+        assert_eq!(vecs.len(), 3);
+        for &v in &vals {
+            assert!((v - 1.0).abs() < 1e-10);
+        }
+        // Eigenvectors should be orthonormal
+        for i in 0..3 {
+            let norm: f64 = vecs[i].iter().map(|x| x * x).sum::<f64>().sqrt();
+            assert!((norm - 1.0).abs() < 1e-8, "eigenvector {} should be unit length, got {}", i, norm);
+        }
+    }
+
+    #[test]
+    fn decomposition_symmetric_2x2_eigenvalues_correct() {
+        // [[2, 1], [1, 2]] -> eigenvalues 1, 3
+        let matrix = vec![2.0, 1.0, 1.0, 2.0];
+        let (vals, vecs) = jacobi_eigen_decomposition(&matrix, 2);
+        assert!((vals[0] - 1.0).abs() < 1e-10, "expected 1.0, got {}", vals[0]);
+        assert!((vals[1] - 3.0).abs() < 1e-10, "expected 3.0, got {}", vals[1]);
+        // Each eigenvector should have unit length
+        for i in 0..2 {
+            let norm: f64 = vecs[i].iter().map(|x| x * x).sum::<f64>().sqrt();
+            assert!((norm - 1.0).abs() < 1e-8, "eigenvector {} norm = {}", i, norm);
+        }
+    }
+
+    #[test]
+    fn decomposition_eigenvectors_orthogonal() {
+        // [[2, 1], [1, 2]] eigenvectors should be orthogonal
+        let matrix = vec![2.0, 1.0, 1.0, 2.0];
+        let (_vals, vecs) = jacobi_eigen_decomposition(&matrix, 2);
+        let dot: f64 = vecs[0].iter().zip(vecs[1].iter()).map(|(a, b)| a * b).sum();
+        assert!(dot.abs() < 1e-8, "eigenvectors should be orthogonal, dot = {}", dot);
+    }
+
+    #[test]
+    fn decomposition_sorted_ascending() {
+        let matrix = vec![3.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0];
+        let (vals, _) = jacobi_eigen_decomposition(&matrix, 3);
+        assert!((vals[0] - 1.0).abs() < 1e-10);
+        assert!((vals[1] - 2.0).abs() < 1e-10);
+        assert!((vals[2] - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn decomposition_av_equals_lambda_v() {
+        // Verify A*v = lambda*v for each eigenpair
+        let matrix = vec![2.0, 1.0, 1.0, 2.0];
+        let n = 2;
+        let (vals, vecs) = jacobi_eigen_decomposition(&matrix, n);
+        for k in 0..n {
+            for i in 0..n {
+                let av_i: f64 = (0..n).map(|j| matrix[i * n + j] * vecs[k][j]).sum();
+                let lv_i = vals[k] * vecs[k][i];
+                assert!(
+                    (av_i - lv_i).abs() < 1e-8,
+                    "A*v[{}][{}] = {}, lambda*v = {}", k, i, av_i, lv_i
+                );
+            }
+        }
+    }
+
+    // --- spectral_embedding_2d tests ---
+
+    #[test]
+    fn embedding_small_graph_returns_zeros() {
+        // 2-node graph: < 3 nodes, returns zero positions
+        let graph = ConceptGraph {
+            nodes: vec![
+                GraphNode::Root { path: PathBuf::from("/a"), file_count: 1 },
+                GraphNode::Directory { path: PathBuf::from("/a/b"), name: "b".into(), depth: 1, file_count: 1 },
+            ],
+            edges: vec![GraphEdge::Contains { parent_idx: 0, child_idx: 1, weight: 1.0 }],
+        };
+        let positions = spectral_embedding_2d(&graph);
+        assert_eq!(positions.len(), 2);
+        for p in &positions {
+            assert_eq!(p[0], 0.0);
+            assert_eq!(p[1], 0.0);
+        }
+    }
+
+    #[test]
+    fn embedding_three_chain_produces_positions() {
+        let graph = ConceptGraph {
+            nodes: vec![
+                GraphNode::Root { path: PathBuf::from("/a"), file_count: 1 },
+                GraphNode::Directory { path: PathBuf::from("/a/b"), name: "b".into(), depth: 1, file_count: 1 },
+                GraphNode::Directory { path: PathBuf::from("/a/b/c"), name: "c".into(), depth: 2, file_count: 1 },
+            ],
+            edges: vec![
+                GraphEdge::Contains { parent_idx: 0, child_idx: 1, weight: 1.0 },
+                GraphEdge::Contains { parent_idx: 1, child_idx: 2, weight: 1.0 },
+            ],
+        };
+        let positions = spectral_embedding_2d(&graph);
+        assert_eq!(positions.len(), 3);
+        // Positions should be in [-1, 1] range
+        for p in &positions {
+            assert!(p[0].abs() <= 1.0 + 1e-6, "x out of range: {}", p[0]);
+            assert!(p[1].abs() <= 1.0 + 1e-6, "y out of range: {}", p[1]);
+        }
+        // Not all the same (connected graph with structure)
+        let all_same = positions.windows(2).all(|w| (w[0][0] - w[1][0]).abs() < 1e-6);
+        assert!(!all_same, "positions should differ for chain graph");
+    }
+
+    #[test]
+    fn embedding_deterministic() {
+        let graph = ConceptGraph {
+            nodes: vec![
+                GraphNode::Root { path: PathBuf::from("/a"), file_count: 1 },
+                GraphNode::Directory { path: PathBuf::from("/a/b"), name: "b".into(), depth: 1, file_count: 1 },
+                GraphNode::Directory { path: PathBuf::from("/a/c"), name: "c".into(), depth: 1, file_count: 1 },
+            ],
+            edges: vec![
+                GraphEdge::Contains { parent_idx: 0, child_idx: 1, weight: 1.0 },
+                GraphEdge::Contains { parent_idx: 0, child_idx: 2, weight: 1.0 },
+            ],
+        };
+        let pos_a = spectral_embedding_2d(&graph);
+        let pos_b = spectral_embedding_2d(&graph);
+        for (a, b) in pos_a.iter().zip(pos_b.iter()) {
+            assert!((a[0] - b[0]).abs() < 1e-10, "x not deterministic");
+            assert!((a[1] - b[1]).abs() < 1e-10, "y not deterministic");
+        }
     }
 }

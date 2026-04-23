@@ -10,3 +10,4 @@ pub mod observe;
 pub mod identity;
 pub mod init;
 pub mod loss;
+pub mod views;

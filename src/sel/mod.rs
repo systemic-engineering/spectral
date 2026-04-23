@@ -4,6 +4,7 @@
 
 pub mod llm;
 pub mod join;
+pub mod tui;
 pub mod fate_actor;
 pub mod matrix;
 pub mod surface;

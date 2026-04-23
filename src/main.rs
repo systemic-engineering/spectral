@@ -39,6 +39,15 @@ fn main() {
     if args.len() < 2 {
         eprintln!("spectral — git for graphs");
         eprintln!();
+        eprintln!("optics (each subcommand IS an optic — add --json for machine output):");
+        eprintln!("  spectral status [path]       Lens    — nodes, edges, tension, loss");
+        eprintln!("  spectral savings [path]      Lens    — token savings, cache efficiency");
+        eprintln!("  spectral loss [path]         Fold    — per-file loss, sorted descending");
+        eprintln!("  spectral peers [path]        Traversal — known peers");
+        eprintln!("  spectral crystal [path]      Prism   — crystallized nodes");
+        eprintln!("  spectral benchmark [path]    Lens    — hook latencies, SLO status");
+        eprintln!("  spectral join @ctx --add .   AffineTraversal — TUI session");
+        eprintln!();
         eprintln!("five operations:");
         eprintln!("  spectral focus <path>        observe any structure");
         eprintln!("  spectral project <path>      filter by what matters");
@@ -62,11 +71,73 @@ fn main() {
         eprintln!("  spectral mirror <cmd>        compiler");
         eprintln!("  spectral memory <cmd>        agent memory");
         eprintln!("  spectral serve [--project .]  MCP server");
-        eprintln!("  spectral join <path>         join identity conversation");
         process::exit(1);
     }
 
+    let json_flag = args.iter().any(|a| a == "--json");
+
     match args[1].as_str() {
+        // Optic subcommands — typed by optic, zero inference cost
+        "status" => {
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
+            let view = spectral::apache2::views::StatusView::from_session(Path::new(path));
+            if json_flag {
+                println!("{}", serde_json::to_string_pretty(&view).unwrap());
+            } else {
+                println!("{}", view.format());
+            }
+        }
+
+        "savings" => {
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
+            let view = spectral::apache2::views::SavingsView::from_session(Path::new(path));
+            if json_flag {
+                println!("{}", serde_json::to_string_pretty(&view).unwrap());
+            } else {
+                println!("{}", view.format());
+            }
+        }
+
+        "loss" => {
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
+            let view = spectral::apache2::views::LossView::from_session(Path::new(path));
+            if json_flag {
+                println!("{}", serde_json::to_string_pretty(&view).unwrap());
+            } else {
+                println!("{}", view.format());
+            }
+        }
+
+        "peers" => {
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
+            let view = spectral::apache2::views::PeersView::from_session(Path::new(path));
+            if json_flag {
+                println!("{}", serde_json::to_string_pretty(&view).unwrap());
+            } else {
+                println!("{}", view.format());
+            }
+        }
+
+        "crystal" => {
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
+            let view = spectral::apache2::views::CrystalView::from_session(Path::new(path));
+            if json_flag {
+                println!("{}", serde_json::to_string_pretty(&view).unwrap());
+            } else {
+                println!("{}", view.format());
+            }
+        }
+
+        "benchmark" => {
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
+            let view = spectral::apache2::views::BenchmarkView::from_session(Path::new(path));
+            if json_flag {
+                println!("{}", serde_json::to_string_pretty(&view).unwrap());
+            } else {
+                println!("{}", view.format());
+            }
+        }
+
         // Five operations
         "focus" | "project" | "split" | "zoom" | "refract" => {
             optic_cmd(&args[1], &args[2..]);
@@ -253,14 +324,47 @@ fn main() {
             serve::serve(project);
         }
 
-        // Join — identity conversation (requires --features sel)
+        // Join — TUI eigenboard session (requires --features sel)
         "join" => {
             #[cfg(feature = "sel")]
             {
-                let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
-                if let Err(e) = spectral::sel::join::join(Path::new(path)) {
-                    eprintln!("spectral join: {}", e);
-                    process::exit(1);
+                // Parse: spectral join @context --add /path1 --add /path2
+                let context_name = args.get(2)
+                    .map(|s| s.trim_start_matches('@'))
+                    .unwrap_or("default");
+
+                let mut add_paths: Vec<&str> = Vec::new();
+                let mut i = 3;
+                while i < args.len() {
+                    if args[i] == "--add" {
+                        if let Some(path) = args.get(i + 1) {
+                            add_paths.push(path.as_str());
+                            i += 2;
+                        } else {
+                            eprintln!("spectral join: --add requires a path");
+                            process::exit(1);
+                        }
+                    } else if args[i] == "--json" {
+                        i += 1;
+                    } else {
+                        // Treat bare args as paths to add
+                        add_paths.push(args[i].as_str());
+                        i += 1;
+                    }
+                }
+
+                // If no --add paths and not @context, fall back to REPL
+                if add_paths.is_empty() {
+                    let path = ".";
+                    if let Err(e) = spectral::sel::join::join(Path::new(path)) {
+                        eprintln!("spectral join: {}", e);
+                        process::exit(1);
+                    }
+                } else {
+                    if let Err(e) = spectral::sel::tui::run_tui(context_name, &add_paths) {
+                        eprintln!("spectral join: {}", e);
+                        process::exit(1);
+                    }
                 }
             }
             #[cfg(not(feature = "sel"))]
