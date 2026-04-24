@@ -25,7 +25,7 @@ mod tests {
         SpectralSupervisor, SupervisorArgs, SupervisorMsg,
     };
 
-    const SCHEMA: &str = "grammar @memory {\n  type = node | edge\n}";
+    const SCHEMA: &str = "grammar @memory {\n  type = node | edge | eigenboard\n}";
 
     /// Open a test SpectralDb in a temp directory.
     fn open_test_db() -> (tempfile::TempDir, SpectralDb, PathBuf) {
@@ -473,6 +473,68 @@ mod tests {
             self_loss.is_finite(),
             "self_loss should be finite, got: {}",
             self_loss
+        );
+
+        supervisor.stop(None);
+    }
+
+    // ── Test 10: graph_query end-to-end ──────────────────────────────
+
+    #[tokio::test]
+    async fn graph_query_end_to_end() {
+        let (_dir, db, db_path) = open_test_db();
+        let supervisor = spawn_test_supervisor(db, db_path).await;
+
+        let mcp: ActorRef<McpMsg> =
+            ractor::call!(supervisor, SupervisorMsg::GetMcpRef)
+                .expect("failed to get McpActor ref");
+
+        // Store eigenboard nodes
+        for (repo, fiedler, n, e) in [
+            ("/identity", 0.0432, 47, 122),
+            ("/spectral", 0.0615, 83, 201),
+            ("/small", 0.0100, 10, 15),
+        ] {
+            let text = call_tool(
+                &mcp,
+                "memory_store",
+                json!({
+                    "node_type": "eigenboard",
+                    "content": format!("repo:{} fiedler={:.4} nodes={} edges={}", repo, fiedler, n, e)
+                }),
+            )
+            .await;
+            assert!(
+                text.starts_with("stored:"),
+                "expected stored:, got: {}",
+                text
+            );
+        }
+
+        // Query: find eigenboards with fiedler > 0.04, sort desc, limit 1
+        let text = call_tool(
+            &mcp,
+            "graph_query",
+            json!({
+                "query": "find eigenboard |> where fiedler > 0.04 |> sort by fiedler desc |> limit 1"
+            }),
+        )
+        .await;
+
+        assert!(
+            text.contains("count: 1"),
+            "expected count: 1, got: {}",
+            text
+        );
+        assert!(
+            text.contains("spectral"),
+            "highest fiedler should be spectral, got: {}",
+            text
+        );
+        assert!(
+            text.contains("loss:"),
+            "should report loss, got: {}",
+            text
         );
 
         supervisor.stop(None);
