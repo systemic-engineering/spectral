@@ -126,6 +126,17 @@ pub fn builtin_tool_definitions() -> Vec<Value> {
                 "required": ["path"]
             }
         }),
+        json!({
+            "name": "graph_query",
+            "description": "Execute a pipe-forward graph query. Syntax: `find <type> [|> where <field> <op> <value>] [|> sort by <field> [desc]] [|> limit <n>] [|> count]`. Sources: find, near, hot. Transforms: where, walk, sort, limit. Terminals: count, loss. Every query returns ShannonLoss — bits of information filtered out.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Pipe-forward query string, e.g. 'find eigenboard |> where fiedler > 0.04 |> sort by fiedler desc |> limit 5'" }
+                },
+                "required": ["query"]
+            }
+        }),
     ]
 }
 
@@ -194,6 +205,7 @@ mod tests {
         assert!(names.contains(&"memory_status"));
         assert!(names.contains(&"spectral_loss"));
         assert!(names.contains(&"gestalt_detect"));
+        assert!(names.contains(&"graph_query"));
     }
 
     #[test]

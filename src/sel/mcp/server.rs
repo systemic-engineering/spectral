@@ -127,6 +127,7 @@ async fn dispatch_tool(name: &str, arguments: &Value, state: &McpState) -> Value
         "memory_crystallize" => dispatch_memory_crystallize(state).await,
         "spectral_loss" => dispatch_spectral_loss(state).await,
         "gestalt_detect" => dispatch_gestalt_detect(arguments, state).await,
+        "graph_query" => dispatch_graph_query(arguments, state).await,
         _ => tool_result_error(&format!("{}: unknown tool", name)),
     }
 }
@@ -324,6 +325,37 @@ async fn dispatch_gestalt_detect(arguments: &Value, state: &McpState) -> Value {
 }
 
 
+/// graph_query → MemoryActor::QueryFull
+async fn dispatch_graph_query(arguments: &Value, state: &McpState) -> Value {
+    let query = match arguments.get("query").and_then(|v| v.as_str()) {
+        Some(q) => q.to_string(),
+        None => return tool_result_error("graph_query: missing 'query' argument"),
+    };
+
+    match ractor::call!(state.memory, MemoryMsg::QueryFull, query) {
+        Ok(Ok(response)) => {
+            let nodes_json: Vec<Value> = response
+                .nodes
+                .iter()
+                .map(|n| {
+                    serde_json::json!({
+                        "oid": n.oid,
+                        "type": n.node_type,
+                        "data": n.data,
+                    })
+                })
+                .collect();
+            tool_result_text(&format!(
+                "count: {}, loss: {:.4} bits\nnodes: {}",
+                response.count,
+                response.loss,
+                serde_json::to_string_pretty(&nodes_json).unwrap_or_default(),
+            ))
+        }
+        Ok(Err(e)) => tool_result_error(&format!("graph_query failed: {}", e)),
+        Err(e) => tool_result_error(&format!("graph_query actor error: {}", e)),
+    }
+}
 
 // ── JSON helpers ─────────────────────────────────────────────────────
 
