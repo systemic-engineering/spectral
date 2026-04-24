@@ -19,6 +19,22 @@ pub struct RecalledNode {
     pub distance: f64,
 }
 
+/// Response from a pipeline query.
+#[derive(Debug, Clone)]
+pub struct QueryResponse {
+    pub count: usize,
+    pub loss: f64,
+    pub nodes: Vec<QueryNode>,
+}
+
+/// A node in a query response (serializable for MCP).
+#[derive(Debug, Clone)]
+pub struct QueryNode {
+    pub oid: String,
+    pub node_type: String,
+    pub data: String,
+}
+
 // ── Messages ───────────────────────────────────────────────────────────
 
 /// Messages the MemoryActor can receive.
@@ -40,6 +56,12 @@ pub enum MemoryMsg {
 
     /// Flush to git. Fire-and-forget.
     Flush,
+
+    /// Execute a pipe-forward query pipeline. Reply: Ok((count, loss)) or Err(reason).
+    Query(String, ractor::RpcReplyPort<Result<(usize, f64), String>>),
+
+    /// Execute a pipe-forward query, return full results.
+    QueryFull(String, ractor::RpcReplyPort<Result<QueryResponse, String>>),
 }
 
 // ── Actor state ────────────────────────────────────────────────────────
@@ -135,6 +157,36 @@ impl Actor for MemoryActor {
 
             MemoryMsg::Flush => {
                 state.db.flush();
+            }
+
+            MemoryMsg::Query(query_str, reply) => {
+                let result = state
+                    .db
+                    .query_pipeline(&query_str)
+                    .map(|r| (r.count, r.loss))
+                    .map_err(|e| e.to_string());
+                let _ = reply.send(result);
+            }
+
+            MemoryMsg::QueryFull(query_str, reply) => {
+                let result = state
+                    .db
+                    .query_pipeline(&query_str)
+                    .map(|r| QueryResponse {
+                        count: r.count,
+                        loss: r.loss,
+                        nodes: r
+                            .nodes
+                            .into_iter()
+                            .map(|n| QueryNode {
+                                oid: n.oid,
+                                node_type: n.node_type,
+                                data: String::from_utf8_lossy(&n.data).to_string(),
+                            })
+                            .collect(),
+                    })
+                    .map_err(|e| e.to_string());
+                let _ = reply.send(result);
             }
         }
         Ok(())
@@ -272,6 +324,58 @@ mod tests {
         )
         .expect("recall call failed");
         assert!(recalled.is_empty(), "recall on empty db = empty");
+
+        actor_ref.stop(None);
+    }
+
+    #[tokio::test]
+    async fn memory_actor_query_pipeline() {
+        let (_dir, db) = open_test_db();
+
+        // Seed data
+        db.insert("node", b"name=alice role=admin").unwrap();
+        db.insert("node", b"name=bob role=user").unwrap();
+        db.insert("node", b"name=carol role=admin").unwrap();
+
+        let actor_ref = MemoryActor::spawn_with_db(None, db)
+            .await
+            .expect("spawn failed");
+
+        let result: Result<(usize, f64), String> = ractor::call!(
+            actor_ref,
+            MemoryMsg::Query,
+            "find node |> where role = admin |> count".to_string()
+        )
+        .expect("query call failed");
+
+        let (count, _loss) = result.unwrap();
+        assert_eq!(count, 2, "alice and carol are admins");
+
+        actor_ref.stop(None);
+    }
+
+    #[tokio::test]
+    async fn memory_actor_query_returns_nodes() {
+        let (_dir, db) = open_test_db();
+
+        db.insert("eigenboard", b"repo:/x fiedler=0.08 nodes=50").unwrap();
+        db.insert("eigenboard", b"repo:/y fiedler=0.02 nodes=30").unwrap();
+
+        let actor_ref = MemoryActor::spawn_with_db(None, db)
+            .await
+            .expect("spawn failed");
+
+        let result: Result<QueryResponse, String> = ractor::call!(
+            actor_ref,
+            MemoryMsg::QueryFull,
+            "find eigenboard |> where fiedler > 0.04".to_string()
+        )
+        .expect("query call failed");
+
+        let response = result.unwrap();
+        assert_eq!(response.count, 1);
+        assert_eq!(response.nodes.len(), 1);
+        assert!(response.nodes[0].data.contains("repo:/x"));
 
         actor_ref.stop(None);
     }
