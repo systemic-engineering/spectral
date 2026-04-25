@@ -12,6 +12,8 @@
 /// With `--features sel`: actor-backed, real dispatch.
 /// Without: stub mode, protocol only.
 pub fn serve(project_path: &str) {
+    spawn_binary_watcher();
+
     #[cfg(feature = "sel")]
     {
         let path = std::path::PathBuf::from(project_path);
@@ -21,6 +23,37 @@ pub fn serve(project_path: &str) {
     #[cfg(not(feature = "sel"))]
     {
         serve_stub(project_path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::binary_changed;
+
+    #[test]
+    fn binary_changed_false_for_current_mtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bin");
+        std::fs::write(&path, b"v1").unwrap();
+        let baseline = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert!(!binary_changed(&path, baseline));
+    }
+
+    #[test]
+    fn binary_changed_true_after_rebuild() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bin");
+        std::fs::write(&path, b"v1").unwrap();
+        let baseline = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&path, b"v2").unwrap();
+        assert!(binary_changed(&path, baseline));
+    }
+
+    #[test]
+    fn binary_changed_false_for_missing_file() {
+        let baseline = std::time::SystemTime::UNIX_EPOCH;
+        assert!(!binary_changed(std::path::Path::new("/nonexistent/bin"), baseline));
     }
 }
 
