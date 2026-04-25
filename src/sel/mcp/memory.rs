@@ -62,6 +62,12 @@ pub enum MemoryMsg {
 
     /// Execute a pipe-forward query, return full results.
     QueryFull(String, ractor::RpcReplyPort<Result<QueryResponse, String>>),
+
+    /// Run a spectral cascade cycle. Reply: true if any namespace changed.
+    ///
+    /// CascadeActor sends this instead of calling db.run_cascade() directly,
+    /// ensuring cascade always runs on the authoritative in-memory db.
+    RunCascade(ractor::RpcReplyPort<bool>),
 }
 
 // ── Actor state ────────────────────────────────────────────────────────
@@ -156,7 +162,14 @@ impl Actor for MemoryActor {
             }
 
             MemoryMsg::Flush => {
-                state.db.flush();
+                if let Err(e) = state.db.flush() {
+                    eprintln!("spectral memory: flush failed: {}", e);
+                }
+            }
+
+            MemoryMsg::RunCascade(reply) => {
+                let changed = state.db.run_cascade();
+                let _ = reply.send(changed);
             }
 
             MemoryMsg::Query(query_str, reply) => {

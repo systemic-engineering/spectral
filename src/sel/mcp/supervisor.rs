@@ -189,14 +189,12 @@ impl Actor for SpectralSupervisor {
         .await
         .map_err(|e| ActorProcessingErr::from(format!("failed to spawn CompilerActor: {}", e)))?;
 
-        // 5. CascadeActor — opens its own SpectralDb for cascade operations
-        let cascade_db = reopen_db(&args.db_path, &args.db_schema, args.db_precision, args.db_max_bytes)
-            .map_err(|e| ActorProcessingErr::from(format!("failed to open cascade db: {}", e)))?;
+        // 5. CascadeActor -- routes cascade through MemoryActor (no second SpectralDb).
         let (cascade_ref, _) = Actor::spawn_linked(
             child_name(prefix, "cascade"),
             CascadeActor,
             super::cascade::CascadeActorArgs {
-                db: cascade_db,
+                memory_ref: memory_ref.clone(),
                 interval: None,
             },
             supervisor_cell.clone(),
@@ -394,28 +392,25 @@ impl Actor for SpectralSupervisor {
                         "spectral supervisor: CascadeActor crashed ({}), restarting",
                         panic_msg
                     );
-                    match reopen_db(&state.db_path, &state.db_schema, state.db_precision, state.db_max_bytes) {
-                        Ok(db) => {
-                            match Actor::spawn_linked(
-                                child_name(&state.name_prefix, "cascade"),
-                                CascadeActor,
-                                super::cascade::CascadeActorArgs { db, interval: None },
-                                supervisor_cell,
-                            )
-                            .await
-                            {
-                                Ok((new_ref, _)) => {
-                                    state.child_ids.cascade_id = new_ref.get_id();
-                                    state.cascade_ref = new_ref;
-                                    eprintln!("spectral supervisor: CascadeActor restarted");
-                                }
-                                Err(e) => {
-                                    eprintln!("spectral supervisor: failed to restart CascadeActor: {}", e);
-                                }
-                            }
+                    // Restart CascadeActor with the current memory_ref (no second db).
+                    match Actor::spawn_linked(
+                        child_name(&state.name_prefix, "cascade"),
+                        CascadeActor,
+                        super::cascade::CascadeActorArgs {
+                            memory_ref: state.memory_ref.clone(),
+                            interval: None,
+                        },
+                        supervisor_cell,
+                    )
+                    .await
+                    {
+                        Ok((new_ref, _)) => {
+                            state.child_ids.cascade_id = new_ref.get_id();
+                            state.cascade_ref = new_ref;
+                            eprintln!("spectral supervisor: CascadeActor restarted");
                         }
                         Err(e) => {
-                            eprintln!("spectral supervisor: failed to reopen db for cascade: {}", e);
+                            eprintln!("spectral supervisor: failed to restart CascadeActor: {}", e);
                         }
                     }
                 } else {

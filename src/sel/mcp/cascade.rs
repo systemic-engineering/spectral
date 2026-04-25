@@ -1,19 +1,24 @@
-//! CascadeActor — periodic spectral-db cascade tick.
+//! CascadeActor -- periodic spectral-db cascade tick.
 //!
-//! Runs the spectral cascade on a timer: dirty leaves → recompute ego spectra
-//! → propagate up the tree. The actor owns a reference to the MemoryActor and
-//! triggers cascade through it (or directly through a shared SpectralDb ref
-//! passed at construction time).
+//! Runs the spectral cascade on a timer: dirty leaves -> recompute ego spectra
+//! -> propagate up the tree.
+//!
+//! The actor holds a reference to MemoryActor and triggers cascade through it
+//! via `MemoryMsg::RunCascade`. This ensures cascade always operates on the
+//! single authoritative in-memory SpectralDb owned by MemoryActor, rather than
+//! a separate stale copy opened at the same path.
 
 use std::time::Duration;
 
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use spectral_db::SpectralDb;
 
+use super::memory::MemoryMsg;
+
 /// Default cascade interval: 5 seconds.
 pub const CASCADE_INTERVAL: Duration = Duration::from_secs(5);
 
-// ── Messages ─────────────────────────────────────────────────────────
+// -- Messages ------------------------------------------------------------------
 
 /// Messages the CascadeActor can receive.
 pub enum CascadeMsg {
@@ -24,44 +29,63 @@ pub enum CascadeMsg {
     Tick,
 }
 
-// ── Actor state ──────────────────────────────────────────────────────
+// -- Actor state ---------------------------------------------------------------
 
-/// The actor's persistent state: holds a SpectralDb for cascade operations.
+/// The actor's persistent state: reference to MemoryActor's db.
 pub struct CascadeState {
-    pub db: SpectralDb,
+    /// Reference to MemoryActor -- cascade operations go through it.
+    pub memory_ref: ActorRef<MemoryMsg>,
     pub cascade_count: u64,
 }
 
-// ── Actor ────────────────────────────────────────────────────────────
+// -- Actor ---------------------------------------------------------------------
 
-/// The CascadeActor: periodically runs spectral-db cascade.
+/// The CascadeActor: periodically triggers spectral-db cascade via MemoryActor.
 ///
-/// On startup, schedules a periodic Tick message. Each tick calls
-/// `db.run_cascade()` to recompute dirty ego spectra and propagate
-/// changes up the spectral tree.
+/// On startup, schedules a periodic Tick message. Each tick sends
+/// `MemoryMsg::RunCascade` to MemoryActor, which runs the cascade on the
+/// authoritative in-memory SpectralDb. This eliminates the dual-SpectralDb
+/// problem where CascadeActor previously maintained a separate stale copy.
 pub struct CascadeActor;
 
 /// Arguments to spawn a CascadeActor.
 pub struct CascadeActorArgs {
-    pub db: SpectralDb,
+    /// Reference to MemoryActor that owns the authoritative SpectralDb.
+    pub memory_ref: ActorRef<MemoryMsg>,
     /// If None, uses CASCADE_INTERVAL.
     pub interval: Option<Duration>,
 }
 
 impl CascadeActor {
-    /// Spawn a CascadeActor with a SpectralDb reference.
-    pub async fn spawn_with_db(
+    /// Spawn a CascadeActor that routes cascade through the given MemoryActor.
+    ///
+    /// This is the primary constructor. CascadeActor does not own a SpectralDb;
+    /// it delegates all cascade operations to MemoryActor via RunCascade messages.
+    pub async fn spawn_with_memory_ref(
         name: Option<String>,
-        db: SpectralDb,
+        memory_ref: ActorRef<MemoryMsg>,
         interval: Option<Duration>,
     ) -> Result<ActorRef<CascadeMsg>, ractor::SpawnErr> {
         let (actor_ref, _handle) = Actor::spawn(
             name,
             CascadeActor,
-            CascadeActorArgs { db, interval },
+            CascadeActorArgs { memory_ref, interval },
         )
         .await?;
         Ok(actor_ref)
+    }
+
+    /// Compatibility shim: spawn with an owned SpectralDb.
+    ///
+    /// Wraps db in a MemoryActor, then spawns CascadeActor with that ref.
+    /// Prefer `spawn_with_memory_ref` when a MemoryActor already exists.
+    pub async fn spawn_with_db(
+        name: Option<String>,
+        db: SpectralDb,
+        interval: Option<Duration>,
+    ) -> Result<ActorRef<CascadeMsg>, ractor::SpawnErr> {
+        let memory_ref = super::memory::MemoryActor::spawn_with_db(None, db).await?;
+        Self::spawn_with_memory_ref(name, memory_ref, interval).await
     }
 }
 
@@ -77,7 +101,7 @@ impl Actor for CascadeActor {
         args: CascadeActorArgs,
     ) -> Result<Self::State, ActorProcessingErr> {
         Ok(CascadeState {
-            db: args.db,
+            memory_ref: args.memory_ref,
             cascade_count: 0,
         })
     }
@@ -87,8 +111,7 @@ impl Actor for CascadeActor {
         myself: ActorRef<Self::Msg>,
         _state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        // Schedule periodic cascade tick
-        // send_interval will keep sending until the actor stops
+        // Schedule periodic cascade tick.
         let _handle = myself.send_interval(CASCADE_INTERVAL, || CascadeMsg::Tick);
         Ok(())
     }
@@ -101,12 +124,15 @@ impl Actor for CascadeActor {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             CascadeMsg::RunCascade(reply) => {
-                let changed = state.db.run_cascade();
+                // Delegate to MemoryActor -- single authoritative db.
+                let changed = ractor::call!(state.memory_ref, MemoryMsg::RunCascade)
+                    .unwrap_or(false);
                 state.cascade_count += 1;
                 let _ = reply.send(changed);
             }
             CascadeMsg::Tick => {
-                let _changed = state.db.run_cascade();
+                // Fire-and-forget cascade tick through MemoryActor.
+                let _ = ractor::call!(state.memory_ref, MemoryMsg::RunCascade);
                 state.cascade_count += 1;
             }
         }
@@ -114,7 +140,7 @@ impl Actor for CascadeActor {
     }
 }
 
-// ── Tests ────────────────────────────────────────────────────────────
+// -- Tests ---------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -130,8 +156,7 @@ mod tests {
         (dir, db)
     }
 
-    // Fix #5 red tests: CascadeActor must use MemoryActor's db, not its own.
-    // spawn_with_memory_ref does not exist yet — fails to compile.
+    // Fix #5: CascadeActor uses MemoryActor's db, not its own.
     #[tokio::test]
     async fn cascade_uses_memory_actor_db() {
         let (_dir, db) = open_test_db();
@@ -139,7 +164,7 @@ mod tests {
             .await
             .expect("memory spawn failed");
 
-        // CascadeActor should be spawnable with a memory_ref, no separate db.
+        // CascadeActor spawnable with memory_ref, no separate db.
         let cascade_ref = CascadeActor::spawn_with_memory_ref(None, memory_ref.clone(), None)
             .await
             .expect("cascade spawn failed");
@@ -163,10 +188,8 @@ mod tests {
             .await
             .expect("spawn failed");
 
-        // Send a manual Tick — should process without error
-        actor_ref
-            .cast(CascadeMsg::Tick)
-            .expect("tick cast failed");
+        // Send a manual Tick -- should process without error
+        actor_ref.cast(CascadeMsg::Tick).expect("tick cast failed");
 
         // Verify actor is still alive
         let changed: bool = ractor::call!(actor_ref, CascadeMsg::RunCascade)
@@ -195,12 +218,11 @@ mod tests {
         .expect("store call failed");
         assert!(oid.is_ok());
 
-        // Connect the node to itself to make a dirty leaf
         let cascade_ref = CascadeActor::spawn_with_memory_ref(None, memory_ref.clone(), None)
             .await
             .expect("cascade spawn failed");
 
-        // RunCascade: even with one node, cascade should run without panic
+        // RunCascade: should run without panic
         let _changed: bool = ractor::call!(cascade_ref, CascadeMsg::RunCascade)
             .expect("cascade after insert failed");
 
