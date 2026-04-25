@@ -116,6 +116,16 @@ pub fn builtin_tool_definitions() -> Vec<Value> {
             "inputSchema": { "type": "object", "properties": {} }
         }),
         json!({
+            "name": "spectral_index",
+            "description": "Traversal<File, Crystal> — full index pipeline: gestalt import (wide) -> edge detection -> Fate tournament (narrow) -> crystallization. The diamond shape of meaning emerging from a repo. Run on commit for continuous knowledge accumulation.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Directory path to index (defaults to current project)" }
+                }
+            }
+        }),
+        json!({
             "name": "gestalt_detect",
             "description": "Run gestalt auto-detection on a directory. Returns file counts by type, concept graph summary, and eigenvalue profile (spectral fingerprint). Works on any repo, no .mirror files required.",
             "inputSchema": {
