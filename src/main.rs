@@ -46,7 +46,8 @@ fn main() {
         eprintln!("  spectral peers [path]        Traversal — known peers");
         eprintln!("  spectral crystal [path]      Prism   — crystallized nodes");
         eprintln!("  spectral benchmark [path]    Lens    — hook latencies, SLO status");
-        eprintln!("  spectral join @ctx --add .   AffineTraversal — TUI session");
+        eprintln!("  spectral index [path]        Traversal  — gestalt → edges → cascade → crystallize");
+    eprintln!("  spectral join @ctx --add .   AffineTraversal — TUI session");
         eprintln!();
         eprintln!("five operations:");
         eprintln!("  spectral focus <path>        observe any structure");
@@ -312,6 +313,32 @@ fn main() {
 
         // Memory — lens CLI
         "memory" => memory_cmd(&args[2..]),
+
+        // Index — Traversal<File, Crystal>: gestalt → edges → cascade → crystallize
+        // Full pipeline runs via MCP (actor state required for cascade + crystallize).
+        // CLI: gestalt stage only. Use mcp__spectral__spectral_index for full pipeline.
+        "index" => {
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
+            let target = std::path::Path::new(path);
+            let (graph, _files, breakdown) = gestalt::graph::build_concept_graph(target);
+            let profile = gestalt::eigenvalue::eigenvalue_profile(&graph);
+            println!("indexed: {}", path);
+            println!(
+                "  files:   {} (md:{} code:{} config:{} mirror:{})",
+                breakdown.total(), breakdown.markdown, breakdown.code,
+                breakdown.config, breakdown.mirror
+            );
+            println!("  graph:   {} nodes, {} edges", graph.nodes.len(), graph.edges.len());
+            if !profile.is_dark() {
+                println!("  fiedler: {:.4}", profile.fiedler_value());
+                println!("  oid:     {}", profile.oid());
+            } else {
+                println!("  fiedler: dark (no connectivity)");
+            }
+            // Cascade + crystallize run via MCP (persistent actor state required)
+            println!("  cascade: via mcp__spectral__spectral_index");
+            println!("  crystals: via mcp__spectral__spectral_index");
+        }
 
         // MCP server
         "serve" => {

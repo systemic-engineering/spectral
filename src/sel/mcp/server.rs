@@ -125,6 +125,7 @@ async fn dispatch_tool(name: &str, arguments: &Value, state: &McpState) -> Value
         "memory_store" => dispatch_memory_store(arguments, state).await,
         "memory_recall" => dispatch_memory_recall(arguments, state).await,
         "memory_crystallize" => dispatch_memory_crystallize(state).await,
+        "spectral_index" => dispatch_spectral_index(arguments, state).await,
         "spectral_loss" => dispatch_spectral_loss(state).await,
         "gestalt_detect" => dispatch_gestalt_detect(arguments, state).await,
         "graph_query" => dispatch_graph_query(arguments, state).await,
@@ -222,6 +223,99 @@ async fn dispatch_memory_crystallize(state: &McpState) -> Value {
         }
         Err(e) => tool_result_error(&format!("memory_crystallize failed: {}", e)),
     }
+}
+
+/// spectral_index — Traversal<File, Crystal>
+///
+/// Full pipeline: gestalt import (wide) → edge detection via cascade →
+/// Fate tournament (narrow) → crystallization. The diamond shape of
+/// meaning emerging from a repo.
+async fn dispatch_spectral_index(arguments: &Value, state: &McpState) -> Value {
+    // Resolve path: argument > project_path > cwd
+    let path_str = arguments
+        .get("path")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| state.project_path.as_ref().map(|p| p.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| ".".to_string());
+
+    let path = std::path::Path::new(&path_str);
+    if !path.is_dir() {
+        return tool_result_error(&format!("spectral_index: '{}' is not a directory", path_str));
+    }
+
+    // ── Stage 1: Gestalt import (wide) ──────────────────────────────
+    let (graph, _files, breakdown) = gestalt::graph::build_concept_graph(path);
+    let profile = gestalt::eigenvalue::eigenvalue_profile(&graph);
+
+    let mut out = Vec::new();
+    out.push(format!("indexed: {}", path_str));
+    out.push(format!(
+        "  files:   {} (md:{} code:{} config:{} mirror:{})",
+        breakdown.total(),
+        breakdown.markdown,
+        breakdown.code,
+        breakdown.config,
+        breakdown.mirror,
+    ));
+    out.push(format!(
+        "  graph:   {} nodes, {} edges",
+        graph.nodes.len(),
+        graph.edges.len()
+    ));
+
+    let profile_oid = if !profile.is_dark() {
+        out.push(format!("  fiedler: {:.4}", profile.fiedler_value()));
+        let oid = profile.oid();
+        // Persist eigenboard node (wide: covers full file set)
+        let content = format!(
+            "repo:{} fiedler={:.4} nodes={} edges={} oid={}",
+            path_str,
+            profile.fiedler_value(),
+            graph.nodes.len(),
+            graph.edges.len(),
+            oid,
+        );
+        let _ = ractor::call!(
+            state.memory,
+            MemoryMsg::Store,
+            "eigenboard".to_string(),
+            content.into_bytes()
+        );
+        Some(oid)
+    } else {
+        out.push("  fiedler: dark (no connectivity)".to_string());
+        None
+    };
+
+    // ── Stage 2+3: Edge detection + Fate tournament (cascade) ─────────
+    let cascade_changed = match ractor::call!(state.memory, MemoryMsg::RunCascade) {
+        Ok(changed) => changed,
+        Err(e) => {
+            out.push(format!("  cascade: failed ({})", e));
+            false
+        }
+    };
+    out.push(format!(
+        "  cascade: {}",
+        if cascade_changed { "settled (new edges)" } else { "stable" }
+    ));
+
+    // ── Stage 4: Crystallization (diamond tip) ───────────────────────
+    let crystal_count = match ractor::call!(state.memory, MemoryMsg::Crystallize) {
+        Ok(crystals) => crystals.len(),
+        Err(_) => 0,
+    };
+    out.push(format!("  crystals: {}", crystal_count));
+
+    if let Some(oid) = profile_oid {
+        out.push(format!("  oid:     {}", oid));
+    }
+
+    // Flush — persist to git-backed store
+    let _ = state.memory.cast(MemoryMsg::Flush);
+
+    tool_result_text(&out.join("\n"))
 }
 
 /// spectral_loss → LspActor::GetLossReport
