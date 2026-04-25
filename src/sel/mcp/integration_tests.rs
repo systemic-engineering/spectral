@@ -621,4 +621,36 @@ mod tests {
 
         supervisor.stop(None);
     }
+
+    // ── Test 10: spectral_index — full pipeline — — — — — — — — — — —
+
+    #[tokio::test]
+    async fn e2e_10_spectral_index_runs_full_pipeline() {
+        let (_dir, db, db_path) = open_test_db();
+        let supervisor = spawn_test_supervisor(db, db_path).await;
+
+        let mcp: ActorRef<McpMsg> =
+            ractor::call!(supervisor, SupervisorMsg::GetMcpRef)
+                .expect("failed to get McpActor ref");
+
+        // Use a real directory (spectral src) as the index target
+        let path = env!("CARGO_MANIFEST_DIR");
+        let text = call_tool(&mcp, "spectral_index", serde_json::json!({ "path": path })).await;
+
+        // Output must contain all four pipeline stages
+        assert!(text.contains("files:"), "expected file count, got: {}", text);
+        assert!(text.contains("fiedler:"), "expected fiedler value, got: {}", text);
+        assert!(text.contains("cascade:"), "expected cascade result, got: {}", text);
+        assert!(text.contains("crystals:"), "expected crystal count, got: {}", text);
+
+        // At least one eigenboard node was stored
+        let status = call_tool(&mcp, "memory_status", serde_json::json!({})).await;
+        assert!(
+            !status.contains("nodes: 0"),
+            "index should have stored at least one node, got: {}",
+            status
+        );
+
+        supervisor.stop(None);
+    }
 }
