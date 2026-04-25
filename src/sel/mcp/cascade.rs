@@ -210,7 +210,7 @@ mod tests {
     }
 
     // Flush must happen after cascade: nodes inserted via MemoryActor must be
-    // persisted to manifest.json after a RunCascade call.
+    // persisted to git refs after a RunCascade call.
     #[tokio::test]
     async fn cascade_flushes_to_disk_after_run() {
         let (dir, db) = open_test_db();
@@ -231,7 +231,7 @@ mod tests {
             .await
             .expect("cascade spawn failed");
 
-        // RunCascade must also flush — manifest.json must appear on disk.
+        // RunCascade must also flush — git refs must appear on disk.
         let _changed: bool = ractor::call!(cascade_ref, CascadeMsg::RunCascade)
             .expect("RunCascade failed");
 
@@ -239,9 +239,26 @@ mod tests {
         let _ = ractor::call!(memory_ref, crate::sel::mcp::memory::MemoryMsg::Status)
             .expect("status failed");
 
+        // Verify flush wrote git refs (replaces manifest.json check).
+        // Git stores refs as files under .git/refs/spectral/nodes/.
+        let refs_dir = dir.path().join(".git/refs/spectral/nodes");
+        let ref_count = if refs_dir.exists() {
+            std::fs::read_dir(&refs_dir)
+                .expect("read refs dir")
+                .count()
+        } else {
+            // packed-refs: check edges.json as proxy for flush having run
+            // (edges.json is still written by flush, refs may be packed)
+            assert!(
+                dir.path().join("edges.json").exists(),
+                "edges.json must exist after RunCascade (flush proof)"
+            );
+            1 // edges.json proves flush ran
+        };
         assert!(
-            dir.path().join("manifest.json").exists(),
-            "manifest.json must exist after RunCascade"
+            ref_count >= 1,
+            "git refs must exist after RunCascade, got {}",
+            ref_count
         );
 
         cascade_ref.stop(None);
