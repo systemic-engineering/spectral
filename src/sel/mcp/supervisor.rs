@@ -200,7 +200,7 @@ impl Actor for SpectralSupervisor {
             super::cascade::CascadeActorArgs {
                 memory_ref: memory_ref.clone(),
                 interval: None,
-                db_path: project_root.clone(),
+                db_path: Some(args.db_path.clone()),
             },
             supervisor_cell.clone(),
         )
@@ -405,7 +405,7 @@ impl Actor for SpectralSupervisor {
                         super::cascade::CascadeActorArgs {
                             memory_ref: state.memory_ref.clone(),
                             interval: None,
-                            db_path: project_root,
+                            db_path: Some(state.db_path.clone()),
                         },
                         supervisor_cell,
                     )
