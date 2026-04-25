@@ -135,3 +135,77 @@ pub fn join(path: &std::path::Path) -> Result<(), String> {
     eprintln!("\n{}", "session ended.".dimmed());
     Ok(())
 }
+
+/// Register a directory as a spectral peer in ~/.spectral.
+/// Returns a summary string for display.
+pub fn join_peer(path: &std::path::Path) -> Result<String, String> {
+    use crate::sel::{peer, mcp::tools};
+
+    let path_str = path.to_str().ok_or("invalid path")?;
+
+    // 1. Init ~/.spectral
+    let home = peer::init_home_spectral()?;
+
+    // 2. Scan grammars from the joined path
+    let grammar_actions = tools::scan_grammars(path_str);
+    let mut grammar_names: Vec<String> = grammar_actions
+        .iter()
+        .map(|a| format!("@{}", a.grammar_name))
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    grammar_names.sort();
+
+    // 3. Push ref packets
+    let ref_count = peer::push_refs(&home, path_str)?;
+
+    // 4. Register peer (idempotent)
+    let oid = format!("{:016x}", ref_count);
+    peer::register_peer(&home, path_str, &oid, grammar_names.clone())?;
+
+    Ok(format!(
+        "joined {} — {} refs, {} grammars: {}",
+        path_str,
+        ref_count,
+        grammar_names.len(),
+        if grammar_names.is_empty() {
+            "(none)".to_string()
+        } else {
+            grammar_names.join(", ")
+        },
+    ))
+}
+
+#[cfg(test)]
+mod peer_tests {
+    use super::*;
+    use std::env;
+
+    #[test]
+    fn join_peer_registers_in_home_spectral() {
+        let tmp = tempfile::tempdir().unwrap();
+        unsafe { env::set_var("HOME", tmp.path()) };
+
+        // Source dir with a .spectral/manifest.json
+        let src = tempfile::tempdir().unwrap();
+        let spec_dir = src.path().join(".spectral");
+        std::fs::create_dir_all(&spec_dir).unwrap();
+        std::fs::write(
+            spec_dir.join("manifest.json"),
+            serde_json::to_vec(&vec!["oid-a", "oid-b"]).unwrap(),
+        )
+        .unwrap();
+
+        let result = join_peer(src.path()).unwrap();
+        assert!(result.contains("joined"), "should report joining: {}", result);
+
+        let home_spectral = tmp.path().join(".spectral");
+        let registry = crate::sel::peer::load_registry(&home_spectral);
+        assert_eq!(registry.peers.len(), 1);
+
+        let refs_raw = std::fs::read(home_spectral.join("refs.json")).unwrap();
+        let refs: Vec<crate::sel::peer::RefPacket> =
+            serde_json::from_slice(&refs_raw).unwrap();
+        assert_eq!(refs.len(), 2);
+    }
+}
