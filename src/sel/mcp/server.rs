@@ -288,7 +288,7 @@ async fn dispatch_spectral_index(arguments: &Value, state: &McpState) -> Value {
         None
     };
 
-    // ── Stage 2+3: Edge detection + Fate tournament (cascade) ─────────
+    // ── Stage 2: Cascade — recompute dirty spectral hashes ─────────
     let cascade_changed = match ractor::call!(state.memory, MemoryMsg::RunCascade) {
         Ok(changed) => changed,
         Err(e) => {
@@ -300,6 +300,21 @@ async fn dispatch_spectral_index(arguments: &Value, state: &McpState) -> Value {
         "  cascade: {}",
         if cascade_changed { "settled (new edges)" } else { "stable" }
     ));
+
+    // ── Stage 3: Content ingest — tokenize nodes, discover coincidence edges ──
+    let mut total_coincidence = 0usize;
+    for node_type in &["observation", "node", "eigenboard"] {
+        if let Ok(Ok(count)) = ractor::call!(
+            state.memory,
+            MemoryMsg::IngestAll,
+            node_type.to_string()
+        ) {
+            total_coincidence += count;
+        }
+    }
+    if total_coincidence > 0 {
+        out.push(format!("  ingest:  {} coincidence edges", total_coincidence));
+    }
 
     // ── Stage 4: Crystallization (diamond tip) ───────────────────────
     let crystal_count = match ractor::call!(state.memory, MemoryMsg::Crystallize) {

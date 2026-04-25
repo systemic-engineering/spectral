@@ -68,6 +68,14 @@ pub enum MemoryMsg {
     /// CascadeActor sends this instead of calling db.run_cascade() directly,
     /// ensuring cascade always runs on the authoritative in-memory db.
     RunCascade(ractor::RpcReplyPort<bool>),
+
+    /// Store a node without waiting for OID reply. Used by inbox drain.
+    StoreFireAndForget(String, Vec<u8>),
+
+    /// Ingest all nodes of a given type: tokenize content, create inferred
+    /// edges to token/compound nodes, discover coincidence edges across
+    /// nodes that share tokens. Reply: Ok(edge_count) or Err(reason).
+    IngestAll(String, ractor::RpcReplyPort<Result<usize, String>>),
 }
 
 // ── Actor state ────────────────────────────────────────────────────────
@@ -177,6 +185,21 @@ impl Actor for MemoryActor {
                     .db
                     .query_pipeline(&query_str)
                     .map(|r| (r.count, r.loss))
+                    .map_err(|e| e.to_string());
+                let _ = reply.send(result);
+            }
+
+            MemoryMsg::StoreFireAndForget(node_type, data) => {
+                let _ = state.db.insert(&node_type, &data);
+            }
+
+            MemoryMsg::IngestAll(node_type, reply) => {
+                let result = state
+                    .db
+                    .ingest_all(&node_type)
+                    .map(|results| {
+                        results.iter().map(|r| r.coincidence_edges).sum()
+                    })
                     .map_err(|e| e.to_string());
                 let _ = reply.send(result);
             }
@@ -391,5 +414,110 @@ mod tests {
         assert!(response.nodes[0].data.contains("repo:/x"));
 
         actor_ref.stop(None);
+    }
+
+    // ── Ingest tests ───────��──────────────────────────────────────────
+
+    const INGEST_SCHEMA: &str =
+        "grammar @memory {\n  type = node | edge | eigenboard | observation | token | compound\n}";
+
+    fn open_ingest_db() -> (tempfile::TempDir, SpectralDb) {
+        let dir = tempfile::tempdir().expect("failed to create tempdir");
+        let db = SpectralDb::open(dir.path(), INGEST_SCHEMA, 1e-6, 5_000_000)
+            .expect("failed to open SpectralDb");
+        (dir, db)
+    }
+
+    #[tokio::test]
+    async fn ingest_all_creates_coincidence_edges() {
+        let (_dir, db) = open_ingest_db();
+
+        // Store observations with overlapping content
+        db.insert("observation", b"eigenvalue computation is fast").unwrap();
+        db.insert("observation", b"eigenvalue decomposition is slow").unwrap();
+        db.insert("observation", b"coffee breakfast sunshine").unwrap();
+
+        let actor_ref = MemoryActor::spawn_with_db(None, db)
+            .await
+            .expect("spawn failed");
+
+        // IngestAll should tokenize observations and create coincidence edges
+        let result: Result<usize, String> = ractor::call!(
+            actor_ref,
+            MemoryMsg::IngestAll,
+            "observation".to_string()
+        )
+        .expect("ingest_all call failed");
+
+        let coincidence_count = result.expect("ingest_all should succeed");
+        assert!(
+            coincidence_count >= 1,
+            "overlapping observations should create coincidence edges, got {}",
+            coincidence_count
+        );
+
+        // Verify edges exist in status
+        let status = ractor::call!(actor_ref, MemoryMsg::Status)
+            .expect("status call failed");
+        assert!(
+            status.edge_count > 0,
+            "graph should have edges after ingest, got {}",
+            status.edge_count
+        );
+
+        actor_ref.stop(None);
+    }
+
+    #[tokio::test]
+    async fn ingest_all_edges_survive_flush_and_reopen() {
+        let dir = tempfile::tempdir().expect("failed to create tempdir");
+        let db_path = dir.path().to_path_buf();
+
+        let edge_count_before;
+        {
+            let db = SpectralDb::open(&db_path, INGEST_SCHEMA, 1e-6, 5_000_000)
+                .expect("failed to open SpectralDb");
+
+            db.insert("observation", b"spectral eigenvalue convergence").unwrap();
+            db.insert("observation", b"spectral hash eigenvalue detection").unwrap();
+
+            let actor_ref = MemoryActor::spawn_with_db(None, db)
+                .await
+                .expect("spawn failed");
+
+            // Ingest
+            let _: Result<usize, String> = ractor::call!(
+                actor_ref,
+                MemoryMsg::IngestAll,
+                "observation".to_string()
+            )
+            .expect("ingest_all call failed");
+
+            // Flush
+            actor_ref.cast(MemoryMsg::Flush).expect("flush cast failed");
+
+            // Sync: wait for flush to complete via a synchronous status call
+            let status = ractor::call!(actor_ref, MemoryMsg::Status)
+                .expect("status call failed");
+            edge_count_before = status.edge_count;
+            assert!(
+                edge_count_before > 0,
+                "must have edges before reopen, got 0"
+            );
+
+            actor_ref.stop(None);
+        }
+
+        // Reopen at the same path — edges must survive
+        {
+            let db = SpectralDb::open(&db_path, INGEST_SCHEMA, 1e-6, 5_000_000)
+                .expect("failed to reopen SpectralDb");
+            let (_, edge_count_after) = db.graph_stats();
+            assert!(
+                edge_count_after > 0,
+                "edges must survive reopen, got 0 (was {} before)",
+                edge_count_before
+            );
+        }
     }
 }

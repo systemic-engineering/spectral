@@ -190,12 +190,14 @@ impl Actor for SpectralSupervisor {
         .map_err(|e| ActorProcessingErr::from(format!("failed to spawn CompilerActor: {}", e)))?;
 
         // 5. CascadeActor -- routes cascade through MemoryActor (no second SpectralDb).
+        let project_root = args.db_path.parent().map(|p| p.to_path_buf());
         let (cascade_ref, _) = Actor::spawn_linked(
             child_name(prefix, "cascade"),
             CascadeActor,
             super::cascade::CascadeActorArgs {
                 memory_ref: memory_ref.clone(),
                 interval: None,
+                db_path: Some(args.db_path.clone()),
             },
             supervisor_cell.clone(),
         )
@@ -399,6 +401,7 @@ impl Actor for SpectralSupervisor {
                         super::cascade::CascadeActorArgs {
                             memory_ref: state.memory_ref.clone(),
                             interval: None,
+                            db_path: Some(state.db_path.clone()),
                         },
                         supervisor_cell,
                     )
