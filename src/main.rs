@@ -206,7 +206,7 @@ fn main() {
                 }
             };
 
-            // Phase 2: session directory (.spectral/)
+            // Phase 2: session directory (.git/spectral/)
             match session::Session::init(target) {
                 Ok(_) => {}
                 Err(e) => {
@@ -215,9 +215,9 @@ fn main() {
                 }
             }
 
-            // Phase 3: write two-tier snapshot + eigenvalue profile to .spectral/
+            // Phase 3: write two-tier snapshot + eigenvalue profile to .git/spectral/
             if let Some(snap) = snapshot {
-                let spectral_dir = target.join(".spectral");
+                let spectral_dir = target.join(".git").join("spectral");
                 // Fast hash = session anchor. Updates on every spectral operation.
                 if let Err(e) = std::fs::write(spectral_dir.join("fast_oid"), snap.fast_oid.as_str()) {
                     eprintln!("spectral: failed to write fast_oid: {}", e);
@@ -298,7 +298,7 @@ fn main() {
                     eprint!("{}", output);
                 }
                 None => {
-                    eprintln!("spectral log: no .spectral directory found (run spectral init)");
+                    eprintln!("spectral log: no .git/spectral directory found (run spectral init)");
                     process::exit(1);
                 }
             }
@@ -410,7 +410,7 @@ fn main() {
 
         // Observe — internal command. Fast (<5ms). No actor system.
         // Reads JSON from stdin: {tool_name, tool_input, tool_response}
-        // Writes to .spectral/inbox/{nanos}-{pid}.json — silent on success.
+        // Writes to .git/spectral/inbox/{nanos}-{pid}.json — silent on success.
         "observe" => {
             use std::io::Read;
             let mut raw = String::new();

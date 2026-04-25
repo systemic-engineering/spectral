@@ -119,11 +119,11 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    /// Build a minimal Session we can use in tests by creating a `.spectral`
+    /// Build a minimal Session we can use in tests by creating a `.git/spectral`
     /// directory and calling `Session::find`.
     fn make_session() -> (TempDir, Session) {
         let tmp = TempDir::new().unwrap();
-        std::fs::create_dir_all(tmp.path().join(".spectral")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".git").join("spectral")).unwrap();
         let session = Session::find(tmp.path()).expect("session should be found after mkdir");
         (tmp, session)
     }

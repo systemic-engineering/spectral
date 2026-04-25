@@ -192,18 +192,20 @@ async fn ingest_content_types(state: &CascadeState) {
 
 // -- Inbox drain ---------------------------------------------------------------
 
-/// Drain `.spectral/inbox/*.json` files into MemoryActor as observation nodes.
+/// Drain `.git/spectral/inbox/*.json` files into MemoryActor as observation nodes.
 ///
 /// Called at the start of every Tick and RunCascade. Reads each JSON file,
 /// formats it as a node content string, stores it via StoreFireAndForget, then
 /// deletes the file. Errors (missing inbox dir, unreadable files) are silently
 /// skipped — inbox drain is best-effort.
+///
+/// `db_path` is the project root; inbox lives at `.git/spectral/inbox/`.
 fn drain_inbox(state: &CascadeState) {
-    let db_path = match &state.db_path {
+    let project_root = match &state.db_path {
         Some(p) => p,
         None => return,
     };
-    let inbox = db_path.join("inbox");
+    let inbox = project_root.join(".git").join("spectral").join("inbox");
     let entries = match std::fs::read_dir(&inbox) {
         Ok(e) => e,
         Err(_) => return,
@@ -332,9 +334,9 @@ mod tests {
                 .count()
         } else {
             // packed-refs: check edges.json as proxy for flush having run
-            // (edges.json is still written by flush, refs may be packed)
+            // (edges.json is now in .git/spectral/, refs may be packed)
             assert!(
-                dir.path().join("edges.json").exists(),
+                dir.path().join(".git").join("spectral").join("edges.json").exists(),
                 "edges.json must exist after RunCascade (flush proof)"
             );
             1 // edges.json proves flush ran
@@ -359,8 +361,8 @@ mod tests {
         let db = SpectralDb::open(&db_path, obs_schema, 1e-6, 5_000_000).expect("open");
         let memory_ref = MemoryActor::spawn_with_db(None, db).await.expect("spawn memory");
 
-        // Create inbox with one observation
-        let inbox = db_path.join("inbox");
+        // Create inbox with one observation (now in .git/spectral/inbox/)
+        let inbox = db_path.join(".git").join("spectral").join("inbox");
         std::fs::create_dir_all(&inbox).unwrap();
         let obs = serde_json::json!({
             "tool": "Bash",
@@ -550,8 +552,8 @@ mod tests {
                 "cascade must create edges, got 0"
             );
 
-            // Step 4: Check edges.json on disk
-            let edges_json = db_path.join("edges.json");
+            // Step 4: Check edges.json on disk (now in .git/spectral/)
+            let edges_json = db_path.join(".git").join("spectral").join("edges.json");
             assert!(
                 edges_json.exists(),
                 "edges.json must exist after cascade+flush"

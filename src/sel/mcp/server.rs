@@ -149,7 +149,7 @@ async fn dispatch_memory_status(state: &McpState) -> Value {
                     "loss_bits": 0.0,
                     "growth_pct": 0.0
                 });
-                let status_path = project_path.join(".spectral/status.json");
+                let status_path = project_path.join(".git/spectral/status.json");
                 let _ = std::fs::write(&status_path, status_json.to_string());
             }
             tool_result_text(&format!(

@@ -36,7 +36,7 @@ pub struct StatusView {
 impl StatusView {
     /// Build a StatusView from the spectral session state.
     pub fn from_session(path: &Path) -> Self {
-        let spectral_dir = path.join(".spectral");
+        let spectral_dir = path.join(".git").join("spectral");
 
         // Load eigenvalue profile if available
         let profile = load_eigenvalue_profile(&spectral_dir);
@@ -167,7 +167,7 @@ pub struct LossView {
 impl LossView {
     /// Build from session state. Scans the eigenvalue profile for loss estimation.
     pub fn from_session(path: &Path) -> Self {
-        let spectral_dir = path.join(".spectral");
+        let spectral_dir = path.join(".git").join("spectral");
         let profile = load_eigenvalue_profile(&spectral_dir);
         let fiedler = profile.as_ref().map(|p| p.fiedler_value()).unwrap_or(0.0);
 

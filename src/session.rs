@@ -1,11 +1,11 @@
-//! Session state — the .spectral directory.
+//! Session state — the .git/spectral directory.
 //!
-//! `spectral init` creates a `.spectral/` directory in the working directory.
+//! `spectral init` creates a `.git/spectral/` directory inside the project's git repo.
 //! The directory is the anchor for all spectral operations in a project tree.
 //!
 //! Layout:
 //! ```
-//! .spectral/
+//! .git/spectral/
 //!   gestalt/     — crystals: reader/user understanding state
 //!   sessions/    — session data
 //!   crystals/    — crystallized subgraphs
@@ -17,17 +17,35 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// A spectral session anchored at a `.spectral/` directory.
+/// A spectral session anchored at a `.git/spectral/` directory.
 pub struct Session {
     root: PathBuf,
 }
 
 impl Session {
-    /// Create the `.spectral/` directory structure under `dir`.
+    /// Create the `.git/spectral/` directory structure under `dir`.
     ///
+    /// If `.git/` doesn't exist, runs `git init` via subprocess.
     /// Idempotent — calling twice does not error.
     pub fn init(dir: &Path) -> io::Result<Self> {
-        let root = dir.join(".spectral");
+        // Ensure .git/ exists
+        let git_dir = dir.join(".git");
+        if !git_dir.exists() {
+            let status = std::process::Command::new("git")
+                .args(["init"])
+                .current_dir(dir)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()?;
+            if !status.success() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "git init failed",
+                ));
+            }
+        }
+
+        let root = git_dir.join("spectral");
 
         // Create all directories (all_ok if they already exist)
         std::fs::create_dir_all(root.join("gestalt"))?;
@@ -54,13 +72,13 @@ impl Session {
         Ok(Session { root })
     }
 
-    /// Walk up from `start` looking for a `.spectral/` directory.
+    /// Walk up from `start` looking for a `.git/spectral/` directory.
     ///
-    /// Returns `None` if no `.spectral/` is found at or above `start`.
+    /// Returns `None` if no `.git/spectral/` is found at or above `start`.
     pub fn find(start: &Path) -> Option<Self> {
         let mut current = start.to_path_buf();
         loop {
-            let candidate = current.join(".spectral");
+            let candidate = current.join(".git").join("spectral");
             if candidate.is_dir() {
                 return Some(Session { root: candidate });
             }
@@ -70,7 +88,7 @@ impl Session {
         }
     }
 
-    /// Path to the `.spectral/` directory.
+    /// Path to the `.git/spectral/` directory.
     pub fn root(&self) -> &Path {
         &self.root
     }
