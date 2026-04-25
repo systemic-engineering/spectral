@@ -265,6 +265,64 @@ mod tests {
         memory_ref.stop(None);
     }
 
+    #[tokio::test]
+    async fn cascade_drains_inbox_on_tick() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().to_path_buf();
+
+        // Open a SpectralDb for the MemoryActor
+        let schema = "grammar @memory {\n  type = node | edge | eigenboard | observation\n}";
+        let db = spectral_db::SpectralDb::open(&db_path, schema, 1e-6, 5_000_000).expect("open");
+        let memory_ref = super::memory::MemoryActor::spawn_with_db(None, db).await.expect("spawn");
+
+        // Create inbox with one observation
+        let inbox = db_path.join("inbox");
+        std::fs::create_dir_all(&inbox).unwrap();
+        let obs = serde_json::json!({
+            "tool": "Bash",
+            "input": "ls",
+            "output": "foo.rs",
+            "timestamp": 1234567890u64,
+        });
+        std::fs::write(inbox.join("1.json"), serde_json::to_string(&obs).unwrap()).unwrap();
+
+        // Spawn cascade with db_path
+        let (cascade_ref, _) = ractor::Actor::spawn(
+            None,
+            CascadeActor,
+            CascadeActorArgs {
+                memory_ref: memory_ref.clone(),
+                db_path: Some(db_path.clone()),
+                tick_interval: std::time::Duration::from_secs(3600),
+            },
+        )
+        .await
+        .expect("spawn cascade");
+
+        // Trigger a tick
+        let _: bool = ractor::call!(cascade_ref, CascadeMsg::Tick).expect("tick");
+
+        // Inbox should be empty
+        assert_eq!(
+            std::fs::read_dir(&inbox).unwrap().count(),
+            0,
+            "inbox should be drained after tick"
+        );
+
+        // Node should be stored (give actor a moment to process the cast)
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let status: spectral_db::DbStatus =
+            ractor::call!(memory_ref, super::memory::MemoryMsg::Status).expect("status");
+        assert!(
+            status.node_count >= 1,
+            "expected at least 1 node from inbox, got {}",
+            status.node_count
+        );
+
+        cascade_ref.stop(None);
+        memory_ref.stop(None);
+    }
+
     // Change inserted via MemoryActor must be visible to CascadeActor's cascade.
     #[tokio::test]
     async fn cascade_sees_memory_actor_inserts() {
