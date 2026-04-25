@@ -133,12 +133,16 @@ impl Actor for CascadeActor {
                 let changed = ractor::call!(state.memory_ref, MemoryMsg::RunCascade)
                     .unwrap_or(false);
                 state.cascade_count += 1;
+                // Flush after every cascade -- nodes must survive process death.
+                let _ = state.memory_ref.cast(MemoryMsg::Flush);
                 let _ = reply.send(changed);
             }
             CascadeMsg::Tick => {
                 // Fire-and-forget cascade tick through MemoryActor.
                 let _ = ractor::call!(state.memory_ref, MemoryMsg::RunCascade);
                 state.cascade_count += 1;
+                // Flush after every tick -- nodes must survive process death.
+                let _ = state.memory_ref.cast(MemoryMsg::Flush);
             }
         }
         Ok(())
@@ -202,6 +206,45 @@ mod tests {
         assert!(!changed);
 
         actor_ref.stop(None);
+        memory_ref.stop(None);
+    }
+
+    // Flush must happen after cascade: nodes inserted via MemoryActor must be
+    // persisted to manifest.json after a RunCascade call.
+    #[tokio::test]
+    async fn cascade_flushes_to_disk_after_run() {
+        let (dir, db) = open_test_db();
+        let memory_ref = MemoryActor::spawn_with_db(None, db)
+            .await
+            .expect("memory spawn failed");
+
+        // Insert a node.
+        let _: Result<String, String> = ractor::call!(
+            memory_ref,
+            crate::sel::mcp::memory::MemoryMsg::Store,
+            "node".to_string(),
+            b"flush-test".to_vec()
+        )
+        .expect("store failed");
+
+        let cascade_ref = CascadeActor::spawn_with_memory_ref(None, memory_ref.clone(), None)
+            .await
+            .expect("cascade spawn failed");
+
+        // RunCascade must also flush — manifest.json must appear on disk.
+        let _changed: bool = ractor::call!(cascade_ref, CascadeMsg::RunCascade)
+            .expect("RunCascade failed");
+
+        // Drain MemoryActor mailbox (Status is synchronous — Flush precedes it).
+        let _ = ractor::call!(memory_ref, crate::sel::mcp::memory::MemoryMsg::Status)
+            .expect("status failed");
+
+        assert!(
+            dir.path().join("manifest.json").exists(),
+            "manifest.json must exist after RunCascade"
+        );
+
+        cascade_ref.stop(None);
         memory_ref.stop(None);
     }
 
