@@ -119,6 +119,7 @@ impl Actor for CascadeActor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sel::mcp::memory::{MemoryActor, MemoryActorArgs};
 
     const SCHEMA: &str = "grammar @memory {\n  type = node | edge\n}";
 
@@ -129,25 +130,36 @@ mod tests {
         (dir, db)
     }
 
+    // Fix #5 red tests: CascadeActor must use MemoryActor's db, not its own.
+    // spawn_with_memory_ref does not exist yet — fails to compile.
     #[tokio::test]
-    async fn cascade_actor_spawn_and_run() {
+    async fn cascade_uses_memory_actor_db() {
         let (_dir, db) = open_test_db();
-        let actor_ref = CascadeActor::spawn_with_db(None, db, None)
+        let memory_ref = MemoryActor::spawn_with_db(None, db)
             .await
-            .expect("spawn failed");
+            .expect("memory spawn failed");
 
-        // RunCascade on empty db should return false (nothing dirty)
-        let changed: bool = ractor::call!(actor_ref, CascadeMsg::RunCascade)
+        // CascadeActor should be spawnable with a memory_ref, no separate db.
+        let cascade_ref = CascadeActor::spawn_with_memory_ref(None, memory_ref.clone(), None)
+            .await
+            .expect("cascade spawn failed");
+
+        // RunCascade on empty db should return false
+        let changed: bool = ractor::call!(cascade_ref, CascadeMsg::RunCascade)
             .expect("cascade call failed");
-        assert!(!changed, "empty db should have no dirty leaves");
+        assert!(!changed, "empty db has no dirty leaves");
 
-        actor_ref.stop(None);
+        cascade_ref.stop(None);
+        memory_ref.stop(None);
     }
 
     #[tokio::test]
     async fn cascade_actor_tick_does_not_panic() {
         let (_dir, db) = open_test_db();
-        let actor_ref = CascadeActor::spawn_with_db(None, db, None)
+        let memory_ref = MemoryActor::spawn_with_db(None, db)
+            .await
+            .expect("memory spawn failed");
+        let actor_ref = CascadeActor::spawn_with_memory_ref(None, memory_ref.clone(), None)
             .await
             .expect("spawn failed");
 
@@ -162,5 +174,37 @@ mod tests {
         assert!(!changed);
 
         actor_ref.stop(None);
+        memory_ref.stop(None);
+    }
+
+    // Change inserted via MemoryActor must be visible to CascadeActor's cascade.
+    #[tokio::test]
+    async fn cascade_sees_memory_actor_inserts() {
+        let (_dir, db) = open_test_db();
+        let memory_ref = MemoryActor::spawn_with_db(None, db)
+            .await
+            .expect("memory spawn failed");
+
+        // Insert a node via MemoryActor
+        let oid: Result<String, String> = ractor::call!(
+            memory_ref,
+            crate::sel::mcp::memory::MemoryMsg::Store,
+            "node".to_string(),
+            b"test".to_vec()
+        )
+        .expect("store call failed");
+        assert!(oid.is_ok());
+
+        // Connect the node to itself to make a dirty leaf
+        let cascade_ref = CascadeActor::spawn_with_memory_ref(None, memory_ref.clone(), None)
+            .await
+            .expect("cascade spawn failed");
+
+        // RunCascade: even with one node, cascade should run without panic
+        let _changed: bool = ractor::call!(cascade_ref, CascadeMsg::RunCascade)
+            .expect("cascade after insert failed");
+
+        cascade_ref.stop(None);
+        memory_ref.stop(None);
     }
 }
