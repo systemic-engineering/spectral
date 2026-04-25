@@ -36,6 +36,8 @@ pub struct CascadeState {
     /// Reference to MemoryActor -- cascade operations go through it.
     pub memory_ref: ActorRef<MemoryMsg>,
     pub cascade_count: u64,
+    /// Actual interval used for periodic ticks.
+    pub interval: Duration,
 }
 
 // -- Actor ---------------------------------------------------------------------
@@ -100,19 +102,22 @@ impl Actor for CascadeActor {
         _myself: ActorRef<Self::Msg>,
         args: CascadeActorArgs,
     ) -> Result<Self::State, ActorProcessingErr> {
+        let interval = args.interval.unwrap_or(CASCADE_INTERVAL);
         Ok(CascadeState {
             memory_ref: args.memory_ref,
             cascade_count: 0,
+            interval,
         })
     }
 
     async fn post_start(
         &self,
         myself: ActorRef<Self::Msg>,
-        _state: &mut Self::State,
+        state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        // Schedule periodic cascade tick.
-        let _handle = myself.send_interval(CASCADE_INTERVAL, || CascadeMsg::Tick);
+        // Schedule periodic cascade tick using the configured interval.
+        let interval = state.interval;
+        let _handle = myself.send_interval(interval, || CascadeMsg::Tick);
         Ok(())
     }
 
