@@ -26,6 +26,7 @@
 mod diff;
 mod log;
 mod memory;
+mod observe;
 mod refs;
 mod serve;
 mod session;
@@ -404,6 +405,43 @@ fn main() {
             {
                 eprintln!("spectral join: requires --features sel");
                 process::exit(1);
+            }
+        }
+
+        // Observe — internal command. Fast (<5ms). No actor system.
+        // Reads JSON from stdin: {tool_name, tool_input, tool_response}
+        // Writes to .git/spectral/inbox/{nanos}.json — silent on success.
+        "observe" => {
+            use std::io::Read;
+            let mut raw = String::new();
+            let _ = std::io::stdin().read_to_string(&mut raw);
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+
+            let tool_name = v.get("tool_name")
+                .or_else(|| v.get("tool"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            let input_raw = v.get("tool_input").or_else(|| v.get("input"));
+            let input_summary = input_raw
+                .map(|x| {
+                    let s = x.to_string();
+                    s.chars().take(500).collect::<String>()
+                })
+                .unwrap_or_default();
+
+            let output_raw = v.get("tool_response").or_else(|| v.get("output"));
+            let output_summary = output_raw
+                .map(|x| {
+                    let s = x.to_string();
+                    s.chars().take(500).collect::<String>()
+                })
+                .unwrap_or_default();
+
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            if let Err(e) = observe::write_observation(&cwd, &tool_name, &input_summary, &output_summary) {
+                eprintln!("{}", e);
             }
         }
 
