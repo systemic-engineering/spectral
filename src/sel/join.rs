@@ -139,7 +139,41 @@ pub fn join(path: &std::path::Path) -> Result<(), String> {
 /// Register a directory as a spectral peer in ~/.spectral.
 /// Returns a summary string for display.
 pub fn join_peer(path: &std::path::Path) -> Result<String, String> {
-    todo!()
+    use crate::sel::{peer, mcp::tools};
+
+    let path_str = path.to_str().ok_or("invalid path")?;
+
+    // 1. Init ~/.spectral
+    let home = peer::init_home_spectral()?;
+
+    // 2. Scan grammars from the joined path
+    let grammar_actions = tools::scan_grammars(path_str);
+    let mut grammar_names: Vec<String> = grammar_actions
+        .iter()
+        .map(|a| format!("@{}", a.grammar_name))
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    grammar_names.sort();
+
+    // 3. Push ref packets
+    let ref_count = peer::push_refs(&home, path_str)?;
+
+    // 4. Register peer (idempotent)
+    let oid = format!("{:016x}", ref_count);
+    peer::register_peer(&home, path_str, &oid, grammar_names.clone())?;
+
+    Ok(format!(
+        "joined {} — {} refs, {} grammars: {}",
+        path_str,
+        ref_count,
+        grammar_names.len(),
+        if grammar_names.is_empty() {
+            "(none)".to_string()
+        } else {
+            grammar_names.join(", ")
+        },
+    ))
 }
 
 #[cfg(test)]

@@ -328,42 +328,48 @@ fn main() {
         "join" => {
             #[cfg(feature = "sel")]
             {
-                // Parse: spectral join @context --add /path1 --add /path2
-                let context_name = args.get(2)
-                    .map(|s| s.trim_start_matches('@'))
-                    .unwrap_or("default");
-
-                let mut add_paths: Vec<&str> = Vec::new();
-                let mut i = 3;
-                while i < args.len() {
-                    if args[i] == "--add" {
-                        if let Some(path) = args.get(i + 1) {
-                            add_paths.push(path.as_str());
-                            i += 2;
-                        } else {
-                            eprintln!("spectral join: --add requires a path");
+                let second = args.get(2).map(|s| s.as_str());
+                match second {
+                    // spectral join <path> — peer join (bare path, no @ prefix)
+                    Some(p) if !p.starts_with('@') && !p.starts_with('-') => {
+                        let path = std::path::Path::new(p);
+                        match spectral::sel::join::join_peer(path) {
+                            Ok(msg) => eprintln!("{}", msg),
+                            Err(e) => {
+                                eprintln!("spectral join: {}", e);
+                                process::exit(1);
+                            }
+                        }
+                    }
+                    // spectral join @context --add /path ... — TUI session
+                    Some(p) if p.starts_with('@') => {
+                        let context_name = p.trim_start_matches('@');
+                        let mut add_paths: Vec<&str> = Vec::new();
+                        let mut i = 3;
+                        while i < args.len() {
+                            if args[i] == "--add" {
+                                if let Some(path) = args.get(i + 1) {
+                                    add_paths.push(path.as_str());
+                                    i += 2;
+                                } else {
+                                    eprintln!("spectral join: --add requires a path");
+                                    process::exit(1);
+                                }
+                            } else {
+                                i += 1;
+                            }
+                        }
+                        if let Err(e) = spectral::sel::tui::run_tui(context_name, &add_paths) {
+                            eprintln!("spectral join: {}", e);
                             process::exit(1);
                         }
-                    } else if args[i] == "--json" {
-                        i += 1;
-                    } else {
-                        // Treat bare args as paths to add
-                        add_paths.push(args[i].as_str());
-                        i += 1;
                     }
-                }
-
-                // If no --add paths and not @context, fall back to REPL
-                if add_paths.is_empty() {
-                    let path = ".";
-                    if let Err(e) = spectral::sel::join::join(Path::new(path)) {
-                        eprintln!("spectral join: {}", e);
-                        process::exit(1);
-                    }
-                } else {
-                    if let Err(e) = spectral::sel::tui::run_tui(context_name, &add_paths) {
-                        eprintln!("spectral join: {}", e);
-                        process::exit(1);
+                    // spectral join (no args) — REPL
+                    _ => {
+                        if let Err(e) = spectral::sel::join::join(std::path::Path::new(".")) {
+                            eprintln!("spectral join: {}", e);
+                            process::exit(1);
+                        }
                     }
                 }
             }
