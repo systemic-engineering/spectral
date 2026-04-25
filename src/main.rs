@@ -410,18 +410,28 @@ fn main() {
 
         // Observe — internal command. Fast (<5ms). No actor system.
         // Reads JSON from stdin: {tool_name, tool_input, tool_response}
-        // Writes to .git/spectral/inbox/{nanos}.json — silent on success.
+        // Writes to .spectral/inbox/{nanos}-{pid}.json — silent on success.
         "observe" => {
             use std::io::Read;
             let mut raw = String::new();
             let _ = std::io::stdin().read_to_string(&mut raw);
-            let v: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
 
-            let tool_name = v.get("tool_name")
+            // Bail silently on empty or invalid JSON — don't write garbage to inbox.
+            if raw.trim().is_empty() {
+                return;
+            }
+            let v: serde_json::Value = match serde_json::from_str(&raw) {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+
+            let tool_name = match v.get("tool_name")
                 .or_else(|| v.get("tool"))
                 .and_then(|x| x.as_str())
-                .unwrap_or("unknown")
-                .to_string();
+            {
+                Some(name) => name.to_string(),
+                None => return,
+            };
 
             let input_raw = v.get("tool_input").or_else(|| v.get("input"));
             let input_summary = input_raw

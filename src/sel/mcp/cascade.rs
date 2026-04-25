@@ -143,34 +143,28 @@ impl Actor for CascadeActor {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             CascadeMsg::RunCascade(reply) => {
-                // Drain inbox before cascade -- observations land in memory first.
-                drain_inbox(state);
-                // Delegate to MemoryActor -- single authoritative db.
-                let changed = ractor::call!(state.memory_ref, MemoryMsg::RunCascade)
-                    .unwrap_or(false);
-                state.cascade_count += 1;
-                // Ingest text content to discover coincidence edges.
-                ingest_content_types(state).await;
-                // Flush after every cascade -- nodes must survive process death.
-                let _ = state.memory_ref.cast(MemoryMsg::Flush);
+                let changed = run_cascade_cycle(state).await;
                 let _ = reply.send(changed);
             }
             CascadeMsg::Tick(reply) => {
-                // Drain inbox before cascade -- observations land in memory first.
-                drain_inbox(state);
-                // Cascade tick through MemoryActor.
-                let changed = ractor::call!(state.memory_ref, MemoryMsg::RunCascade)
-                    .unwrap_or(false);
-                state.cascade_count += 1;
-                // Ingest text content to discover coincidence edges.
-                ingest_content_types(state).await;
-                // Flush after every tick -- nodes must survive process death.
-                let _ = state.memory_ref.cast(MemoryMsg::Flush);
+                let changed = run_cascade_cycle(state).await;
                 let _ = reply.send(changed);
             }
         }
         Ok(())
     }
+}
+
+/// Shared cascade cycle: drain inbox → run cascade → ingest → flush.
+/// Called by both RunCascade and Tick handlers.
+async fn run_cascade_cycle(state: &mut CascadeState) -> bool {
+    drain_inbox(state);
+    let changed = ractor::call!(state.memory_ref, MemoryMsg::RunCascade)
+        .unwrap_or(false);
+    state.cascade_count += 1;
+    ingest_content_types(state).await;
+    let _ = state.memory_ref.cast(MemoryMsg::Flush);
+    changed
 }
 
 // -- Content ingest ------------------------------------------------------------
@@ -198,7 +192,7 @@ async fn ingest_content_types(state: &CascadeState) {
 
 // -- Inbox drain ---------------------------------------------------------------
 
-/// Drain `.git/spectral/inbox/*.json` files into MemoryActor as observation nodes.
+/// Drain `.spectral/inbox/*.json` files into MemoryActor as observation nodes.
 ///
 /// Called at the start of every Tick and RunCascade. Reads each JSON file,
 /// formats it as a node content string, stores it via StoreFireAndForget, then
