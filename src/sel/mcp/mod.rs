@@ -27,7 +27,7 @@ pub mod tools;
 
 // ── Default schema for MCP memory ────────────────────────────────────
 
-const MEMORY_SCHEMA: &str = "grammar @memory {\n  type = node | edge\n}";
+const MEMORY_SCHEMA: &str = "grammar @memory {\n  type = node | edge | eigenboard | observation\n}";
 const MEMORY_PRECISION: f64 = 1e-6;
 const MEMORY_BYTES: usize = 5_000_000;
 

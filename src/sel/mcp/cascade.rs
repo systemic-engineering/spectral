@@ -8,6 +8,7 @@
 //! single authoritative in-memory SpectralDb owned by MemoryActor, rather than
 //! a separate stale copy opened at the same path.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use ractor::{Actor, ActorProcessingErr, ActorRef};
@@ -25,8 +26,9 @@ pub enum CascadeMsg {
     /// Run a single cascade cycle and reply with whether anything changed.
     RunCascade(ractor::RpcReplyPort<bool>),
 
-    /// Self-scheduled periodic tick. Fire-and-forget.
-    Tick,
+    /// Periodic tick: drain inbox, run cascade, reply with cascade result.
+    /// Supports both fire-and-forget (cast) and call-and-reply patterns.
+    Tick(ractor::RpcReplyPort<bool>),
 }
 
 // -- Actor state ---------------------------------------------------------------
@@ -38,6 +40,9 @@ pub struct CascadeState {
     pub cascade_count: u64,
     /// Actual interval used for periodic ticks.
     pub interval: Duration,
+    /// Path to the git/spectral directory containing the inbox.
+    /// None in tests that don't exercise inbox drain.
+    pub db_path: Option<PathBuf>,
 }
 
 // -- Actor ---------------------------------------------------------------------
@@ -56,6 +61,9 @@ pub struct CascadeActorArgs {
     pub memory_ref: ActorRef<MemoryMsg>,
     /// If None, uses CASCADE_INTERVAL.
     pub interval: Option<Duration>,
+    /// Path to the project root (parent of `.git/spectral/inbox/`).
+    /// If None, inbox drain is skipped.
+    pub db_path: Option<PathBuf>,
 }
 
 impl CascadeActor {
@@ -71,7 +79,7 @@ impl CascadeActor {
         let (actor_ref, _handle) = Actor::spawn(
             name,
             CascadeActor,
-            CascadeActorArgs { memory_ref, interval },
+            CascadeActorArgs { memory_ref, interval, db_path: None },
         )
         .await?;
         Ok(actor_ref)
@@ -107,6 +115,7 @@ impl Actor for CascadeActor {
             memory_ref: args.memory_ref,
             cascade_count: 0,
             interval,
+            db_path: args.db_path,
         })
     }
 
@@ -116,8 +125,13 @@ impl Actor for CascadeActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         // Schedule periodic cascade tick using the configured interval.
+        // Tick carries a reply port; for the periodic self-send we use cast via
+        // a one-shot channel where we discard the reply.
         let interval = state.interval;
-        let _handle = myself.send_interval(interval, || CascadeMsg::Tick);
+        let _handle = myself.send_interval(interval, || {
+            let (tx, _rx) = ractor::concurrency::oneshot();
+            CascadeMsg::Tick(tx.into())
+        });
         Ok(())
     }
 
@@ -129,6 +143,8 @@ impl Actor for CascadeActor {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             CascadeMsg::RunCascade(reply) => {
+                // Drain inbox before cascade -- observations land in memory first.
+                drain_inbox(state);
                 // Delegate to MemoryActor -- single authoritative db.
                 let changed = ractor::call!(state.memory_ref, MemoryMsg::RunCascade)
                     .unwrap_or(false);
@@ -137,15 +153,61 @@ impl Actor for CascadeActor {
                 let _ = state.memory_ref.cast(MemoryMsg::Flush);
                 let _ = reply.send(changed);
             }
-            CascadeMsg::Tick => {
-                // Fire-and-forget cascade tick through MemoryActor.
-                let _ = ractor::call!(state.memory_ref, MemoryMsg::RunCascade);
+            CascadeMsg::Tick(reply) => {
+                // Drain inbox before cascade -- observations land in memory first.
+                drain_inbox(state);
+                // Cascade tick through MemoryActor.
+                let changed = ractor::call!(state.memory_ref, MemoryMsg::RunCascade)
+                    .unwrap_or(false);
                 state.cascade_count += 1;
                 // Flush after every tick -- nodes must survive process death.
                 let _ = state.memory_ref.cast(MemoryMsg::Flush);
+                let _ = reply.send(changed);
             }
         }
         Ok(())
+    }
+}
+
+// -- Inbox drain ---------------------------------------------------------------
+
+/// Drain `.git/spectral/inbox/*.json` files into MemoryActor as observation nodes.
+///
+/// Called at the start of every Tick and RunCascade. Reads each JSON file,
+/// formats it as a node content string, stores it via StoreFireAndForget, then
+/// deletes the file. Errors (missing inbox dir, unreadable files) are silently
+/// skipped — inbox drain is best-effort.
+fn drain_inbox(state: &CascadeState) {
+    let db_path = match &state.db_path {
+        Some(p) => p,
+        None => return,
+    };
+    let inbox = db_path.join("inbox");
+    let entries = match std::fs::read_dir(&inbox) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(obs) = serde_json::from_str::<serde_json::Value>(&content) {
+                let tool = obs["tool"].as_str().unwrap_or("unknown");
+                let node_content = format!(
+                    "tool:{} input:{} output:{}",
+                    tool,
+                    obs["input"].as_str().unwrap_or(""),
+                    obs["output"].as_str().unwrap_or(""),
+                );
+                let _ = state.memory_ref.cast(super::memory::MemoryMsg::StoreFireAndForget(
+                    "observation".to_string(),
+                    node_content.into_bytes(),
+                ));
+            }
+            let _ = std::fs::remove_file(&path);
+        }
     }
 }
 
@@ -198,7 +260,8 @@ mod tests {
             .expect("spawn failed");
 
         // Send a manual Tick -- should process without error
-        actor_ref.cast(CascadeMsg::Tick).expect("tick cast failed");
+        let _: bool = ractor::call!(actor_ref, CascadeMsg::Tick)
+            .expect("tick call failed");
 
         // Verify actor is still alive
         let changed: bool = ractor::call!(actor_ref, CascadeMsg::RunCascade)
@@ -271,9 +334,9 @@ mod tests {
         let db_path = dir.path().to_path_buf();
 
         // Open a SpectralDb for the MemoryActor
-        let schema = "grammar @memory {\n  type = node | edge | eigenboard | observation\n}";
-        let db = spectral_db::SpectralDb::open(&db_path, schema, 1e-6, 5_000_000).expect("open");
-        let memory_ref = super::memory::MemoryActor::spawn_with_db(None, db).await.expect("spawn");
+        let obs_schema = "grammar @memory {\n  type = node | edge | eigenboard | observation\n}";
+        let db = SpectralDb::open(&db_path, obs_schema, 1e-6, 5_000_000).expect("open");
+        let memory_ref = MemoryActor::spawn_with_db(None, db).await.expect("spawn memory");
 
         // Create inbox with one observation
         let inbox = db_path.join("inbox");
@@ -293,7 +356,7 @@ mod tests {
             CascadeActorArgs {
                 memory_ref: memory_ref.clone(),
                 db_path: Some(db_path.clone()),
-                tick_interval: std::time::Duration::from_secs(3600),
+                interval: Some(std::time::Duration::from_secs(3600)),
             },
         )
         .await
@@ -312,7 +375,7 @@ mod tests {
         // Node should be stored (give actor a moment to process the cast)
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let status: spectral_db::DbStatus =
-            ractor::call!(memory_ref, super::memory::MemoryMsg::Status).expect("status");
+            ractor::call!(memory_ref, MemoryMsg::Status).expect("status");
         assert!(
             status.node_count >= 1,
             "expected at least 1 node from inbox, got {}",

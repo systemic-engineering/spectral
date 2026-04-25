@@ -68,6 +68,9 @@ pub enum MemoryMsg {
     /// CascadeActor sends this instead of calling db.run_cascade() directly,
     /// ensuring cascade always runs on the authoritative in-memory db.
     RunCascade(ractor::RpcReplyPort<bool>),
+
+    /// Store a node without waiting for OID reply. Used by inbox drain.
+    StoreFireAndForget(String, Vec<u8>),
 }
 
 // ── Actor state ────────────────────────────────────────────────────────
@@ -179,6 +182,10 @@ impl Actor for MemoryActor {
                     .map(|r| (r.count, r.loss))
                     .map_err(|e| e.to_string());
                 let _ = reply.send(result);
+            }
+
+            MemoryMsg::StoreFireAndForget(node_type, data) => {
+                let _ = state.db.insert(&node_type, &data);
             }
 
             MemoryMsg::QueryFull(query_str, reply) => {

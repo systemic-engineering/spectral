@@ -190,12 +190,17 @@ impl Actor for SpectralSupervisor {
         .map_err(|e| ActorProcessingErr::from(format!("failed to spawn CompilerActor: {}", e)))?;
 
         // 5. CascadeActor -- routes cascade through MemoryActor (no second SpectralDb).
+        // db_path is the project root (parent of .spectral/) so the inbox is at
+        // db_path.parent()/.git/spectral/inbox/. We pass args.db_path.parent()
+        // so drain_inbox can locate .git/spectral/inbox/ correctly.
+        let project_root = args.db_path.parent().map(|p| p.to_path_buf());
         let (cascade_ref, _) = Actor::spawn_linked(
             child_name(prefix, "cascade"),
             CascadeActor,
             super::cascade::CascadeActorArgs {
                 memory_ref: memory_ref.clone(),
                 interval: None,
+                db_path: project_root.clone(),
             },
             supervisor_cell.clone(),
         )
@@ -393,12 +398,14 @@ impl Actor for SpectralSupervisor {
                         panic_msg
                     );
                     // Restart CascadeActor with the current memory_ref (no second db).
+                    let project_root = state.db_path.parent().map(|p| p.to_path_buf());
                     match Actor::spawn_linked(
                         child_name(&state.name_prefix, "cascade"),
                         CascadeActor,
                         super::cascade::CascadeActorArgs {
                             memory_ref: state.memory_ref.clone(),
                             interval: None,
+                            db_path: project_root,
                         },
                         supervisor_cell,
                     )
