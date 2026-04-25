@@ -26,6 +26,48 @@ pub fn serve(project_path: &str) {
     }
 }
 
+/// Returns true if the file at `path` was modified after `baseline`.
+/// Used by the binary watcher to detect rebuilds.
+pub fn binary_changed(path: &std::path::Path, baseline: std::time::SystemTime) -> bool {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .map(|mtime| mtime > baseline)
+        .unwrap_or(false)
+}
+
+/// Spawn a background thread that watches the running binary for mtime changes.
+///
+/// When the binary is rebuilt (`cargo build` replaces it), the watcher detects
+/// the newer mtime and calls `exec()` to replace the current process image with
+/// the new binary — same PID, same stdio, Claude Code sees no MCP disconnect.
+fn spawn_binary_watcher() {
+    let binary = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let baseline = match std::fs::metadata(&binary) {
+        Ok(m) => m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+        Err(_) => return,
+    };
+    let args: Vec<String> = std::env::args().collect();
+
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        if binary_changed(&binary, baseline) {
+            eprintln!("spectral serve: binary updated — reloading");
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                let err = std::process::Command::new(&binary)
+                    .args(&args[1..])
+                    .exec();
+                eprintln!("spectral serve: reload failed: {}", err);
+            }
+            break;
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::binary_changed;
