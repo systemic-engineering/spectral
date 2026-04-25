@@ -28,7 +28,7 @@ fn project_filter() -> GrammarFilter {
 }
 
 fn open_test_lens(dir: &Path) -> Lens {
-    Lens::open(dir, project_filter(), "test-agent", 1e-6, 50_000_000)
+    Lens::open(dir, project_filter(), "test-agent", 1e-6, 5_000_000)
         .expect("lens should open")
 }
 
@@ -291,7 +291,7 @@ fn grammar_filter_hides_types() {
             .allow_type("secret"),
         "wide-agent",
         1e-6,
-        50_000_000,
+        5_000_000,
     )
     .unwrap();
 

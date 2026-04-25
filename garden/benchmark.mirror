@@ -1,0 +1,364 @@
+// @benchmark — performance contract grammar for the spectral eigenboard.
+// Taut's domain. Every benchmark produces an OID-stamped result.
+// The eigenboard tracks regression as spectral distance between result vectors.
+//
+// SLO target: 5ms budget for the spectral layer on Apple Silicon M-series.
+// Full frame: 16.7ms at 60fps. Spectral takes 30% of that budget.
+//
+// Instancing model: all motes dispatch in ONE render pass via vertex_index
+// arithmetic (vert_idx / 6 = mote_idx). No per-mote draw call overhead.
+// 200 motes = 200 × 6 = 1200 vertices, single draw. This is correct.
+//
+// Allocation hotpaths (per-frame, must eliminate before hitting SLO):
+//   field.rs:59  — Vec<MoteGpu> built every frame via .iter().map().collect()
+//   field.rs:60  — Vec<ArcGpu> built every frame via .iter().map().collect()
+//   field.rs:66  — make_render_texture() allocates GPU texture every frame
+//   field.rs:92  — Program::new() recompiles shader pipeline every frame
+//   field.rs:122 — Program::new() recompiles shader pipeline every frame
+//   field.rs:93  — upload_storage() creates new WGPU buffer every frame
+//   field.rs:123 — upload_storage() creates new WGPU buffer every frame
+//
+// GPU bandwidth: 200 motes × 48 bytes = 9.6KB mote data.
+// Currently re-uploaded every frame (create_buffer_init, no dirty flag).
+// Static motes waste ~9.6KB/frame of PCIe bandwidth unnecessarily.
+//
+// Glow shader (mote.wgsl:67): length() computed in fragment shader.
+// Fragment invocations at 512×512: ~262K fragments, ~200 mote quads.
+// length() = sqrt(dx^2 + dy^2). On M-series this is 1-2 cycles (fast path).
+// NOT a bottleneck at 200 motes. Would matter at 10K+.
+// frag_pos and mote_center are interpolants passed from vertex shader — correct.
+//
+// Arc shader (arc.wgsl): quad primitive, NOT line primitive. Correct for Metal.
+// Line primitives on Metal are always 1px. Arcs need width — quad is right.
+// 6 vertices per arc, full quad. Proportional half-width: strength * 0.02.
+//
+// Cascade: optimal render ordering for N+1 setup:
+//   1. Static motes (position/color unchanged) — zero re-upload
+//   2. Dirty motes (energy changing from spectral updates) — partial re-upload
+//   3. Arcs (depend on mote positions, recompute only on topology change)
+//   4. Eigenboard overlay (UI chrome, always re-render)
+// Key: separate static vs dynamic motes into two buffers. Static never touches
+// the GPU bandwidth budget. Dynamic arc positions are derived from mote positions
+// already in GPU memory — no CPU round-trip needed if positions are stable.
+
+in @prism
+in @coincidence
+
+grammar @benchmark {
+  // -------------------------------------------------------------------------
+  // Result types
+  // -------------------------------------------------------------------------
+
+  // A benchmark result: timing in microseconds, content-addressed.
+  type result = timing | memory | headroom
+
+  type timing = {
+    name:     str,
+    count:    u64,
+    mean_us:  f64,
+    p99_us:   f64,
+    oid:      content_address,
+  }
+
+  type memory = {
+    name:      str,
+    peak_kb:   f64,
+    oid:       content_address,
+  }
+
+  type headroom = {
+    name:        str,
+    budget_us:   f64,
+    actual_us:   f64,
+    ratio:       f64,
+    oid:         content_address,
+  }
+
+  // A content address: OID-stamped benchmark identity.
+  // SHA-512 of (benchmark_name || mean_us || p99_us).
+  type content_address = str
+
+  // SLO verdict for the spectral layer.
+  type slo = pass | fail | warn
+
+  // -------------------------------------------------------------------------
+  // Mote render benchmarks (spectral-ui)
+  // -------------------------------------------------------------------------
+
+  // Time to render 1 mote (nucleus + glow halo) to a 512x512 headless texture.
+  // Includes: CPU→GPU mote data upload, render pass, NO readback.
+  // Target: < 200us on M-series (single mote is IO-bound on context init).
+  action mote_render_single -> timing
+
+  // Time to render 50 motes with no arcs.
+  // Validates: single-pass instancing scales linearly, no per-mote overhead.
+  // Target: < 1ms on M-series.
+  action mote_render_50 -> timing
+
+  // Time to render 200 motes with no arcs.
+  // THE primary SLO gate: must be < 2.5ms to leave arc budget.
+  // Validates: 9.6KB mote upload + 1200-vertex draw completes in budget.
+  // Target: < 2.5ms on M-series.
+  action mote_render_200 -> timing
+
+  // -------------------------------------------------------------------------
+  // Full field benchmark
+  // -------------------------------------------------------------------------
+
+  // Full eigenboard field: 200 motes + proportional arc count.
+  // Arc count scales with topology density. Default: 200 arcs (one per mote).
+  // Includes: mote pass + arc pass, additive blending, NO readback.
+  // Target: < 5ms on M-series (spectral layer SLO).
+  action field_render_full -> timing
+
+  // -------------------------------------------------------------------------
+  // GPU memory benchmark
+  // -------------------------------------------------------------------------
+
+  // Peak GPU memory allocation during field_render_full.
+  // Accounts for: mote storage buffer (9.6KB) + arc storage buffer (~6.4KB)
+  // + render texture (512×512×4 = 1MB) + staging buffer (1MB).
+  // Expected peak: ~2.1MB. Regression threshold: +20%.
+  action gpu_memory_peak -> memory
+
+  // -------------------------------------------------------------------------
+  // Frame budget headroom
+  // -------------------------------------------------------------------------
+
+  // (16.7ms - actual_ms) / 16.7ms — fraction of frame budget remaining
+  // after the spectral layer completes.
+  // At SLO target (5ms): headroom = (16.7 - 5.0) / 16.7 = 0.70.
+  // Pass threshold: headroom >= 0.40 (spectral must leave 40% for the rest).
+  action frame_budget_headroom -> headroom
+
+  // -------------------------------------------------------------------------
+  // Regression detection
+  // -------------------------------------------------------------------------
+
+  // Compare two OID-stamped results as spectral distance.
+  // d = |mean_new - mean_old| / mean_old
+  // Threshold: 0.10 = 10% regression triggers a flag.
+  action regression_check(baseline: content_address, current: content_address) -> slo
+
+  // Compare the full benchmark suite against a named baseline snapshot.
+  action suite_regression(baseline_tag: str) -> slo
+
+  // -------------------------------------------------------------------------
+  // Cascade: ordering contract
+  // -------------------------------------------------------------------------
+
+  // The render cascade that minimizes frame N+1 cost:
+  //   static_motes -> dynamic_motes -> arcs -> overlay
+  // Dirty flag propagation: mote positions dirty → arcs dirty.
+  // Mote energy dirty → motes dirty, arcs NOT dirty.
+  type cascade_phase = static_motes | dynamic_motes | arcs | overlay
+
+  // Record which phases were dirty in frame N (for N+1 prediction).
+  action cascade_record(phase: cascade_phase, dirty: bool) -> result
+
+  // -------------------------------------------------------------------------
+  // Allocation audit
+  // -------------------------------------------------------------------------
+
+  // Count heap allocations during a render call.
+  // Zero-allocation target for static scenes after warm-up.
+  // Current state: 4+ allocations per frame (see hotpaths above).
+  // Tracked as timing with mean_us = allocation_count for comparison.
+  action alloc_audit(scene: str) -> timing
+
+  // -------------------------------------------------------------------------
+  // spectral init benchmarks
+  // -------------------------------------------------------------------------
+
+  // Identity init: .mirror file discovery + bias chain derivation.
+  // Scales with number of .mirror files in the target directory.
+  // Target: < 1ms for 10 files, < 10ms for 100 files.
+  action init_identity(file_count: u64) -> timing
+
+  // Session directory creation (.spectral/ layout).
+  // Filesystem-bound. Target: < 5ms.
+  action init_session -> timing
+
+  // -------------------------------------------------------------------------
+  // Fate tournament benchmarks
+  // -------------------------------------------------------------------------
+
+  // Single model selection: features → decision.
+  // Pure arithmetic: 16×5 matmul + softmax. Target: < 1us.
+  action fate_select_single -> timing
+
+  // Full tick: manifold pipeline (focus → project → refract).
+  // Includes 16x16 matrix operations + Casimir enforcement.
+  // Target: < 10us.
+  action fate_tick_single -> timing
+
+  // 5-model sequential tournament: one select per model context.
+  // Target: < 5us.
+  action fate_tournament_sequential -> timing
+
+  // Compiled BF runtime: single inference.
+  // Target: < 500ns (the binary IS the model).
+  action fate_bf_compiled -> timing
+
+  // 10×10 Jacobi eigensystem (dark coupling decomposition).
+  // Target: < 100us.
+  action fate_eigensystem -> timing
+
+  // SCF crystallization loop: derive → route → derive until stable.
+  // Target: < 500us for static coupling (2 iterations).
+  action fate_crystallize -> timing
+
+  // -------------------------------------------------------------------------
+  // GPU contention (fate + spectral-ui shared device)
+  // -------------------------------------------------------------------------
+
+  // Measures: can fate inference run during a render frame without starvation?
+  // Apple Silicon unified memory: single pool, no PCIe. The question is
+  // command queue contention, not memory bandwidth.
+  type contention = {
+    render_ms:    f64,
+    inference_ms: f64,
+    overhead_pct: f64,
+    oid:          content_address,
+  }
+
+  // Measure render + inference contention on shared GPU device.
+  action gpu_contention_test -> contention
+
+  // -------------------------------------------------------------------------
+  // Superposition architecture benchmarks
+  // -------------------------------------------------------------------------
+  // The GPU holds the superposition. The CPU collapses it.
+  // These benchmarks measure the five numbers that define the system's aperture.
+
+  // The superposition: compute | render | idle held simultaneously.
+  type device_state = compute | render | idle
+
+  // A snapshot: content-addressed anchor in spacetime.
+  // The CPU serializes field state, hashes it, stamps the OID. The clock tick.
+  type snapshot = {
+    oid:         content_address,
+    tick:        u64,
+    state:       device_state,
+    mote_count:  u64,
+  }
+
+  // Convergence measurement: does superposition width narrow over ticks?
+  type convergence = {
+    ticks:           u64,
+    slope:           f64,
+    converging:      bool,
+    width_history:   str,
+    oid:             content_address,
+  }
+
+  // CPU snapshot cost: serialize + content-address + OID stamp.
+  // Target: < 1ms at 200 motes.
+  // 200 motes x 12 bytes = 2.4KB serialized. Hash is the bottleneck.
+  action cpu_snapshot(mote_count: u64) -> timing
+
+  // GPU superposition hold time: how many render ticks fit in 16.7ms?
+  // One tick = render dispatch + snapshot. The frame budget bounds the width.
+  // At 200 motes + 200 arcs, target: >= 3 ticks per frame.
+  action gpu_superposition_hold -> timing
+
+  // Collapse latency: time from decision to wgpu render pass begin.
+  // The | resolves to one path. Measures dispatch overhead, not render time.
+  action collapse_wgpu(mote_count: u64) -> timing
+
+  // Cascade ratio: superposition_hold_time / snapshot_time.
+  // This IS the system's aperture. Higher = wider = more uncertainty held.
+  // At 200 motes, target ratio > 10 (snapshot < 10% of render cost).
+  action cascade_ratio(mote_count: u64) -> headroom
+
+  // N -> N+1 convergence: does superposition width narrow over ticks?
+  // Run 100 ticks, measure the slope of width_history.
+  // Negative slope = converging (system finds its rhythm).
+  // Zero slope = stable. Positive = diverging (something is wrong).
+  action convergence_rate -> convergence
+
+  // Full tick cycle: snapshot + dispatch + snapshot.
+  // The real workload. Three operations that define one superposition tick.
+  // Target: < 10ms total at 200 motes + 200 arcs (leaves 40% frame budget).
+  action full_tick_cycle -> timing
+}
+
+---
+
+test "benchmark types exist" {
+  @benchmark has result
+  @benchmark has timing
+  @benchmark has memory
+  @benchmark has headroom
+  @benchmark has slo
+}
+
+test "mote benchmark actions exist" {
+  @benchmark has mote_render_single
+  @benchmark has mote_render_50
+  @benchmark has mote_render_200
+}
+
+test "field and memory actions exist" {
+  @benchmark has field_render_full
+  @benchmark has gpu_memory_peak
+  @benchmark has frame_budget_headroom
+}
+
+test "regression actions exist" {
+  @benchmark has regression_check
+  @benchmark has suite_regression
+}
+
+test "cascade phases complete" {
+  @benchmark.cascade_phase has static_motes
+  @benchmark.cascade_phase has dynamic_motes
+  @benchmark.cascade_phase has arcs
+  @benchmark.cascade_phase has overlay
+}
+
+test "slo verdicts complete" {
+  @benchmark.slo has pass
+  @benchmark.slo has fail
+  @benchmark.slo has warn
+}
+
+test "init benchmark actions exist" {
+  @benchmark has init_identity
+  @benchmark has init_session
+}
+
+test "fate benchmark actions exist" {
+  @benchmark has fate_select_single
+  @benchmark has fate_tick_single
+  @benchmark has fate_tournament_sequential
+  @benchmark has fate_bf_compiled
+  @benchmark has fate_eigensystem
+  @benchmark has fate_crystallize
+}
+
+test "gpu contention type exists" {
+  @benchmark has contention
+  @benchmark has gpu_contention_test
+}
+
+test "superposition types exist" {
+  @benchmark has device_state
+  @benchmark has snapshot
+  @benchmark has convergence
+}
+
+test "device state branches complete" {
+  @benchmark.device_state has compute
+  @benchmark.device_state has render
+  @benchmark.device_state has idle
+}
+
+test "superposition benchmark actions exist" {
+  @benchmark has cpu_snapshot
+  @benchmark has gpu_superposition_hold
+  @benchmark has collapse_wgpu
+  @benchmark has cascade_ratio
+  @benchmark has convergence_rate
+  @benchmark has full_tick_cycle
+}

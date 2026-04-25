@@ -1,23 +1,79 @@
+[workspace]
+resolver = "2"
+members = [
+    ".",
+    "crates/witness-rs",
+    "crates/gestalt",
+    "crates/ui",
+]
+
+[workspace.dependencies]
+prism-core = { path = "../prism/core" }
+terni = { path = "../prism/imperfect" }
+mirror = { path = "../mirror" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
 [package]
 name = "spectral"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "jq for reality. One binary. Five operations. Everything settles."
+description = "git for graphs. One binary. Five operations. Everything settles."
+
+[lib]
+name = "spectral"
+path = "src/lib.rs"
 
 [[bin]]
 name = "spectral"
 path = "src/main.rs"
 
+[features]
+default = []
+sel = ["dep:rustyline", "dep:colored", "dep:reqwest", "dep:tokio", "dep:ractor", "dep:fate", "dep:spectral-db", "dep:tower-lsp", "dep:dashmap", "dep:ratatui", "dep:crossterm", "dep:image", "dep:spectral-ui"]
+
 [dependencies]
 mirror = { path = "../mirror" }
-lens = { path = "../lens" }
-prism = { path = "../prism" }
-spectral-db = { path = "../spectral-db" }
+prism = { package = "prism-core", path = "../prism/core" }
+gestalt = { path = "crates/gestalt" }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
-conversation = { path = "../conversation" }
-ractor = "0.15"
-tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+terni = { path = "../prism/imperfect" }
+
+# sel-gated dependencies
+rustyline = { version = "14", optional = true }
+colored = { version = "2", optional = true }
+reqwest = { version = "0.12", features = ["json"], optional = true }
+tokio = { version = "1", features = ["full"], optional = true }
+fate = { path = "../fate", optional = true }
+ractor = { version = "0.15", features = ["async-trait"], optional = true }
+
+# sel-gated — MCP / LSP / memory server
+tower-lsp = { version = "0.20", optional = true }
+dashmap = { version = "6", optional = true }
+spectral-db = { path = "../spectral-db", optional = true }
+
+# sel-gated — TUI (spectral join)
+ratatui = { version = "0.29", optional = true }
+crossterm = { version = "0.28", optional = true }
+image = { version = "0.25", optional = true }
+spectral-ui = { path = "crates/ui", optional = true }
+
+# Temporarily disabled — pending further integration
+# lens = { path = "../lens" }
+# conversation = { path = "../conversation" }
 
 [dev-dependencies]
 tempfile = "3"
+spectral-db = { path = "../spectral-db", features = ["test-support"] }
+divan = "0.1"
+
+[[bench]]
+name = "spectral_init"
+harness = false
+
+[[bench]]
+name = "hook_latency"
+harness = false
+required-features = ["sel"]

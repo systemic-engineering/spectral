@@ -1,0 +1,9 @@
+[package]
+name = "witness-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Operation witnessing for spectral — signed attestations of graph operations."
+
+[dependencies]
+prism-core = { workspace = true }
+terni = { workspace = true }
