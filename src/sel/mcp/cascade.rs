@@ -333,13 +333,20 @@ mod tests {
                 .expect("read refs dir")
                 .count()
         } else {
-            // packed-refs: check edges.json as proxy for flush having run
-            // (edges.json is now in .git/spectral/, refs may be packed)
+            // packed-refs: check refs/spectral/head file as proxy for flush having run
+            // (graph is now a git tree commit, not edges.json)
+            let head_ref_path = dir.path().join(".git/refs/spectral/head");
+            let packed_refs = dir.path().join(".git/packed-refs");
+            let has_head = head_ref_path.exists()
+                || (packed_refs.exists()
+                    && std::fs::read_to_string(&packed_refs)
+                        .unwrap_or_default()
+                        .contains("refs/spectral/head"));
             assert!(
-                dir.path().join(".git").join("spectral").join("edges.json").exists(),
-                "edges.json must exist after RunCascade (flush proof)"
+                has_head,
+                "refs/spectral/head must exist after RunCascade (flush proof)"
             );
-            1 // edges.json proves flush ran
+            1 // graph commit proves flush ran
         };
         assert!(
             ref_count >= 1,
@@ -496,7 +503,7 @@ mod tests {
         memory_ref.stop(None);
     }
 
-    // Full litmus: store → cascade → flush → check edges.json → reopen → edges survive.
+    // Full litmus: store → cascade → flush → check graph tree → reopen → edges survive.
     #[tokio::test]
     async fn litmus_edges_persist_through_cascade_and_reopen() {
         let dir = tempfile::tempdir().unwrap();
@@ -552,17 +559,17 @@ mod tests {
                 "cascade must create edges, got 0"
             );
 
-            // Step 4: Check edges.json on disk (now in .git/spectral/)
-            let edges_json = db_path.join(".git").join("spectral").join("edges.json");
+            // Step 4: Check graph tree commit exists (refs/spectral/head)
+            let head_ref_path = db_path.join(".git/refs/spectral/head");
+            let packed_refs = db_path.join(".git/packed-refs");
+            let has_head = head_ref_path.exists()
+                || (packed_refs.exists()
+                    && std::fs::read_to_string(&packed_refs)
+                        .unwrap_or_default()
+                        .contains("refs/spectral/head"));
             assert!(
-                edges_json.exists(),
-                "edges.json must exist after cascade+flush"
-            );
-            let edges_bytes = std::fs::read(&edges_json).unwrap();
-            let edges: Vec<serde_json::Value> = serde_json::from_slice(&edges_bytes).unwrap();
-            assert!(
-                !edges.is_empty(),
-                "edges.json must contain edges, got empty array"
+                has_head,
+                "refs/spectral/head must exist after cascade+flush"
             );
 
             cascade_ref.stop(None);
