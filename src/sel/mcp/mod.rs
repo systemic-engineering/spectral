@@ -163,9 +163,11 @@ fn dispatch_protocol(
 
 /// Start the MCP server with full actor backing.
 ///
-/// Opens SpectralDb at `project_path/.spectral/`, spawns SpectralSupervisor
+/// Opens SpectralDb at `project_path`, spawns SpectralSupervisor
 /// (which spawns MemoryActor, FateActor, LspActor, CompilerActor,
 /// CascadeActor, and McpActor), then runs the JSON-RPC stdio loop.
+///
+/// The db stores working files in `.git/spectral/` inside the project.
 pub fn start_mcp(project_path: PathBuf) {
     eprintln!("spectral serve: starting MCP server (actor-backed)");
     eprintln!("  project: {}", project_path.display());
@@ -174,18 +176,18 @@ pub fn start_mcp(project_path: PathBuf) {
     let actions = scan_grammars(&project_str);
     eprintln!("  grammars: {} actions", actions.len());
 
-    // Ensure .spectral/ directory exists for the database
-    let db_path = project_path.join(".spectral");
-    if !db_path.exists() {
-        if let Err(e) = std::fs::create_dir_all(&db_path) {
-            eprintln!("spectral serve: failed to create .spectral/: {}", e);
+    // Ensure .git/spectral/ directory exists for the database working files
+    let git_spectral = project_path.join(".git").join("spectral");
+    if !git_spectral.exists() {
+        if let Err(e) = std::fs::create_dir_all(&git_spectral) {
+            eprintln!("spectral serve: failed to create .git/spectral/: {}", e);
             eprintln!("  falling back to stub mode");
             return;
         }
     }
 
-    // Open SpectralDb
-    let db = match SpectralDb::open(&db_path, MEMORY_SCHEMA, MEMORY_PRECISION, MEMORY_BYTES) {
+    // Open SpectralDb at the project root (it handles .git/spectral/ internally)
+    let db = match SpectralDb::open(&project_path, MEMORY_SCHEMA, MEMORY_PRECISION, MEMORY_BYTES) {
         Ok(db) => db,
         Err(e) => {
             eprintln!("spectral serve: failed to open SpectralDb: {}", e);
@@ -195,12 +197,14 @@ pub fn start_mcp(project_path: PathBuf) {
     };
 
     // Build tokio runtime and spawn supervisor tree
+    // db_path passed to supervisor is the project root; cascade derives
+    // .git/spectral/ from it for inbox drain.
     let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
 
     let (supervisor_ref, mcp_ref) = runtime.block_on(async {
         let supervisor_ref = SpectralSupervisor::spawn_all(
             db,
-            db_path.clone(),
+            project_path.clone(),
             MEMORY_SCHEMA.to_string(),
             MEMORY_PRECISION,
             MEMORY_BYTES,

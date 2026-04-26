@@ -1,14 +1,14 @@
 //! spectral observe — inbox writer.
 //!
 //! Fast (<5ms) file I/O only. No actor system, no DB.
-//! Writes JSON observations to `.spectral/inbox/{nanos}.json`.
+//! Writes JSON observations to `.git/spectral/inbox/{nanos}.json`.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Returns the inbox directory: `project_root/.spectral/inbox/`
+/// Returns the inbox directory: `project_root/.git/spectral/inbox/`
 pub fn inbox_dir(project_root: &Path) -> PathBuf {
-    project_root.join(".spectral").join("inbox")
+    project_root.join(".git").join("spectral").join("inbox")
 }
 
 /// Write a single observation as JSON to the inbox.

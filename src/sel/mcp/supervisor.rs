@@ -70,7 +70,7 @@ pub struct SupervisorState {
     pub cascade_ref: ActorRef<CascadeMsg>,
     pub mcp_ref: ActorRef<McpMsg>,
     pub child_ids: ChildIds,
-    /// Retained for restarts: path to .spectral/ directory.
+    /// Retained for restarts: project root path (SpectralDb opens .git/spectral/).
     pub db_path: PathBuf,
     /// Schema used to open SpectralDb.
     pub db_schema: String,
@@ -190,7 +190,7 @@ impl Actor for SpectralSupervisor {
         .map_err(|e| ActorProcessingErr::from(format!("failed to spawn CompilerActor: {}", e)))?;
 
         // 5. CascadeActor -- routes cascade through MemoryActor (no second SpectralDb).
-        let project_root = args.db_path.parent().map(|p| p.to_path_buf());
+        // db_path is the project root; cascade derives .git/spectral/inbox/ from it.
         let (cascade_ref, _) = Actor::spawn_linked(
             child_name(prefix, "cascade"),
             CascadeActor,
@@ -205,6 +205,7 @@ impl Actor for SpectralSupervisor {
         .map_err(|e| ActorProcessingErr::from(format!("failed to spawn CascadeActor: {}", e)))?;
 
         // 6. McpActor — depends on memory + fate refs
+        // db_path IS the project root now (not .spectral/)
         let (mcp_ref, _) = Actor::spawn_linked(
             child_name(prefix, "mcp"),
             McpActor,
@@ -212,7 +213,7 @@ impl Actor for SpectralSupervisor {
                 memory: memory_ref.clone(),
                 fate: fate_ref.clone(),
                 lsp: Some(lsp_ref.clone()),
-                project_path: Some(args.db_path.parent().unwrap_or(&args.db_path).to_path_buf()),
+                project_path: Some(args.db_path.clone()),
             },
             supervisor_cell,
         )
