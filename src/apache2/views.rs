@@ -36,23 +36,22 @@ pub struct StatusView {
 impl StatusView {
     /// Build a StatusView from the spectral session state.
     pub fn from_session(path: &Path) -> Self {
-        let spectral_dir = path.join(".git").join("spectral");
-
-        // Load eigenvalue profile if available
-        let profile = load_eigenvalue_profile(&spectral_dir);
-        let tension = profile.as_ref().map(|p| p.fiedler_value()).unwrap_or(0.0);
-
-        // Load concept graph for node/edge counts
-        let (graph, _, _) = gestalt::graph::build_concept_graph(path);
+        // Use graph cache: instant if cached, gestalt scan if not
+        let cached = crate::apache2::graph_cache::load_or_build(path);
+        let tension = if cached.profile.is_dark() {
+            0.0
+        } else {
+            cached.profile.fiedler_value()
+        };
 
         StatusView {
-            nodes: graph.nodes.len(),
-            edges: graph.edges.len(),
+            nodes: cached.graph.nodes.len(),
+            edges: cached.graph.edges.len(),
             crystals: count_crystals(path),
             loss_bits: 0.0, // computed from loss fold
             tension,
             growth_pct: 0.0,
-            cached: 0,
+            cached: if cached.from_cache { 1 } else { 0 },
             hot_paths: 0,
             queries: 0,
         }

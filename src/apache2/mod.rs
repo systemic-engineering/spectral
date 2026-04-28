@@ -11,4 +11,5 @@ pub mod identity;
 pub mod init;
 pub mod inference;
 pub mod loss;
+pub mod graph_cache;
 pub mod views;

@@ -321,8 +321,10 @@ fn main() {
         "index" => {
             let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
             let target = std::path::Path::new(path);
-            let (graph, _files, breakdown) = gestalt::graph::build_concept_graph(target);
-            let profile = gestalt::eigenvalue::eigenvalue_profile(&graph);
+            let cached = spectral::apache2::graph_cache::load_or_build(target);
+            let graph = &cached.graph;
+            let profile = &cached.profile;
+            let breakdown = &cached.breakdown;
             println!("indexed: {}", path);
             println!(
                 "  files:   {} (md:{} code:{} config:{} mirror:{})",
@@ -335,6 +337,11 @@ fn main() {
                 println!("  oid:     {}", profile.oid());
             } else {
                 println!("  fiedler: dark (no connectivity)");
+            }
+            if cached.from_cache {
+                println!("  source:  cached (.git/spectral/contexts/graph.json)");
+            } else {
+                println!("  source:  computed (gestalt scan)");
             }
             // Cascade + crystallize run via MCP (persistent actor state required)
             println!("  cascade: via mcp__spectral__spectral_index");

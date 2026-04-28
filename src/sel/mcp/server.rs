@@ -178,7 +178,12 @@ async fn dispatch_memory_store(arguments: &Value, state: &McpState) -> Value {
     };
 
     match ractor::call!(state.memory, MemoryMsg::Store, node_type, content) {
-        Ok(Ok(oid)) => tool_result_text(&format!("stored: {}", oid)),
+        Ok(Ok(oid)) => {
+            // Flush to git immediately — every store reaches disk.
+            // Graphs and git. Always.
+            let _ = state.memory.cast(MemoryMsg::Flush);
+            tool_result_text(&format!("stored: {}", oid))
+        }
         Ok(Err(e)) => tool_result_error(&format!("memory_store failed: {}", e)),
         Err(e) => tool_result_error(&format!("memory_store actor error: {}", e)),
     }
@@ -218,6 +223,8 @@ async fn dispatch_memory_crystallize(state: &McpState) -> Value {
             if crystals.is_empty() {
                 tool_result_text("no subgraphs ready for crystallization")
             } else {
+                // Flush after crystallization — crystals must reach git.
+                let _ = state.memory.cast(MemoryMsg::Flush);
                 tool_result_text(&format!("crystallized {} subgraphs", crystals.len()))
             }
         }
@@ -327,6 +334,15 @@ async fn dispatch_spectral_index(arguments: &Value, state: &McpState) -> Value {
         out.push(format!("  oid:     {}", oid));
     }
 
+    // ── Persist graph summary + profile to .git/spectral/ ──────────────
+    // The graph must survive process exit. Write via graph_cache for format
+    // convergence: CLI and MCP write the same JSON shape with dir_hash.
+    let resolved_path = std::path::Path::new(&path_str);
+    match crate::apache2::graph_cache::write_graph_cache(resolved_path, &graph, &profile, &breakdown) {
+        Ok(()) => out.push("  persisted: graph.json + profile.json".to_string()),
+        Err(e) => out.push(format!("  persist failed: {}", e)),
+    }
+
     // Flush — persist to git-backed store
     let _ = state.memory.cast(MemoryMsg::Flush);
 
@@ -384,8 +400,10 @@ async fn dispatch_gestalt_detect(arguments: &Value, state: &McpState) -> Value {
         return tool_result_error(&format!("gestalt_detect: '{}' is not a directory", path_str));
     }
 
-    let (graph, _files, breakdown) = gestalt::graph::build_concept_graph(path);
-    let profile = gestalt::eigenvalue::eigenvalue_profile(&graph);
+    let cached = crate::apache2::graph_cache::load_or_build(path);
+    let graph = &cached.graph;
+    let profile = &cached.profile;
+    let breakdown = &cached.breakdown;
 
     let mut lines = Vec::new();
     lines.push(format!(
@@ -782,6 +800,205 @@ mod tests {
 
         mcp_ref.stop(None);
         lsp_ref.stop(None);
+        memory_ref.stop(None);
+        fate_ref.stop(None);
+    }
+
+    #[tokio::test]
+    async fn mcp_memory_store_flushes_to_git() {
+        let (dir, db) = open_test_db();
+        let db_path = dir.path().to_path_buf();
+        let memory_ref = MemoryActor::spawn_with_db(None, db)
+            .await
+            .expect("spawn memory failed");
+        let fate_ref = FateActor::spawn_untrained(None)
+            .await
+            .expect("spawn fate failed");
+        let mcp_ref = McpActor::spawn_with_refs(None, memory_ref.clone(), fate_ref.clone())
+            .await
+            .expect("spawn mcp failed");
+
+        // Store a node via MCP
+        let result: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "memory_store".to_string(),
+                    arguments: json!({
+                        "node_type": "node",
+                        "content": "persistence test"
+                    }),
+                },
+                reply,
+            )
+        )
+        .expect("call failed");
+
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.starts_with("stored: "), "got: {}", text);
+
+        // Sync: wait for flush to complete via a status call
+        let _: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "memory_status".to_string(),
+                    arguments: json!({}),
+                },
+                reply,
+            )
+        )
+        .expect("status call failed");
+
+        // The graph tree commit at refs/spectral/head must exist after store
+        let head_ref_path = db_path.join(".git/refs/spectral/head");
+        let packed_refs = db_path.join(".git/packed-refs");
+        let has_head = head_ref_path.exists()
+            || (packed_refs.exists()
+                && std::fs::read_to_string(&packed_refs)
+                    .unwrap_or_default()
+                    .contains("refs/spectral/head"));
+        assert!(
+            has_head,
+            "refs/spectral/head must exist after memory_store — store must flush to git"
+        );
+
+        // Verify: reopen SpectralDb at same path — node must survive
+        mcp_ref.stop(None);
+        memory_ref.stop(None);
+        fate_ref.stop(None);
+
+        // Give actors time to stop
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let db2 = SpectralDb::open(&db_path, SCHEMA, 1e-6, 5_000_000)
+            .expect("reopen failed");
+        let (node_count, _edge_count) = db2.graph_stats();
+        assert!(
+            node_count >= 1,
+            "node must survive reopen after memory_store, got {} nodes",
+            node_count
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_spectral_index_persists_graph_to_git() {
+        // Create a directory with files to index
+        let project = tempfile::tempdir().expect("failed to create project dir");
+        let project_path = project.path().to_path_buf();
+        std::fs::create_dir_all(project_path.join(".git/spectral")).unwrap();
+        std::fs::write(project_path.join("readme.md"), "# Test\n\nContent.\n").unwrap();
+        let sub = project_path.join("src");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("lib.rs"), "pub fn main() {}\n").unwrap();
+
+        let (_dir, db) = open_test_db();
+        let memory_ref = MemoryActor::spawn_with_db(None, db)
+            .await
+            .expect("spawn memory failed");
+        let fate_ref = FateActor::spawn_untrained(None)
+            .await
+            .expect("spawn fate failed");
+        let mcp_ref = McpActor::spawn_with_refs(None, memory_ref.clone(), fate_ref.clone())
+            .await
+            .expect("spawn mcp failed");
+
+        // Run spectral_index on the project directory
+        let result: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "spectral_index".to_string(),
+                    arguments: json!({ "path": project_path.to_str().unwrap() }),
+                },
+                reply,
+            )
+        )
+        .expect("call failed");
+
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("indexed:"), "should contain indexed, got: {}", text);
+
+        // Graph must be persisted to .git/spectral/contexts/graph.json
+        let graph_path = project_path.join(".git/spectral/contexts/graph.json");
+        assert!(
+            graph_path.exists(),
+            "graph.json must be written after spectral_index"
+        );
+
+        // Profile must be persisted
+        let profile_path = project_path.join(".git/spectral/contexts/profile.json");
+        assert!(
+            profile_path.exists(),
+            "profile.json must be written after spectral_index"
+        );
+
+        // graph.json must be valid JSON and contain nodes + dir_hash
+        let graph_content = std::fs::read_to_string(&graph_path).unwrap();
+        let graph_val: serde_json::Value = serde_json::from_str(&graph_content)
+            .expect("graph.json must be valid JSON");
+        assert!(
+            graph_val.get("nodes").is_some(),
+            "graph.json must contain 'nodes' field"
+        );
+        assert!(
+            graph_val.get("dir_hash").is_some(),
+            "graph.json must contain 'dir_hash' for staleness check"
+        );
+        assert!(
+            graph_val.get("breakdown").is_some(),
+            "graph.json must contain 'breakdown' for CLI convergence"
+        );
+
+        mcp_ref.stop(None);
+        memory_ref.stop(None);
+        fate_ref.stop(None);
+    }
+
+    #[tokio::test]
+    async fn mcp_index_cache_convergence_with_cli() {
+        // After MCP writes graph.json, CLI's load_or_build should read it
+        let project = tempfile::tempdir().expect("failed to create project dir");
+        let project_path = project.path().to_path_buf();
+        std::fs::create_dir_all(project_path.join(".git/spectral")).unwrap();
+        std::fs::write(project_path.join("readme.md"), "# Hello\n\nWorld.\n").unwrap();
+
+        let (_dir, db) = open_test_db();
+        let memory_ref = MemoryActor::spawn_with_db(None, db)
+            .await
+            .expect("spawn memory failed");
+        let fate_ref = FateActor::spawn_untrained(None)
+            .await
+            .expect("spawn fate failed");
+        let mcp_ref = McpActor::spawn_with_refs(None, memory_ref.clone(), fate_ref.clone())
+            .await
+            .expect("spawn mcp failed");
+
+        // MCP index writes the cache
+        let _: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "spectral_index".to_string(),
+                    arguments: json!({ "path": project_path.to_str().unwrap() }),
+                },
+                reply,
+            )
+        )
+        .expect("call failed");
+
+        // CLI's load_or_build should use the cache (from_cache = true)
+        let cached = crate::apache2::graph_cache::load_or_build(&project_path);
+        assert!(
+            cached.from_cache,
+            "CLI must read MCP-written cache (from_cache should be true)"
+        );
+        assert!(
+            cached.graph.nodes.len() > 0,
+            "cached graph should have nodes"
+        );
+
+        mcp_ref.stop(None);
         memory_ref.stop(None);
         fate_ref.stop(None);
     }

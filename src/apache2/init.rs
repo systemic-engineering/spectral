@@ -158,15 +158,15 @@ pub fn init_identity(path: &Path) -> Imperfect<InitResult, String, InitLoss> {
 
     let mirror_count = mirror_files.len() as u32;
 
-    // Run gestalt auto-detection
-    let (gestalt_graph, _detected_files, gestalt_breakdown) =
-        gestalt::graph::build_concept_graph(path);
+    // Run gestalt auto-detection — always recompute, write cache for later.
+    let cached = crate::apache2::graph_cache::build_and_cache(path);
+    let gestalt_graph = cached.graph;
+    let gestalt_breakdown = cached.breakdown;
     let gestalt_files_detected = gestalt_breakdown.total();
 
-    // Compute eigenvalue profile if graph is non-empty
-    let eigenvalue_profile = if !gestalt_graph.nodes.is_empty() {
-        let profile = gestalt::eigenvalue::eigenvalue_profile(&gestalt_graph);
-        if profile.is_dark() { None } else { Some(profile) }
+    // Eigenvalue profile from the cache computation
+    let eigenvalue_profile = if !gestalt_graph.nodes.is_empty() && !cached.profile.is_dark() {
+        Some(cached.profile)
     } else {
         None
     };

@@ -65,9 +65,10 @@ impl App {
             // Run init to ensure .spectral/ exists
             let _ = init_identity(path);
 
-            // Build concept graph for this path
-            let (graph, _, _) = gestalt::graph::build_concept_graph(path);
-            let positions = spectral_embedding_2d(&graph);
+            // Build concept graph for this path — use cache if available
+            let cached = crate::apache2::graph_cache::load_or_build(path);
+            let graph = &cached.graph;
+            let positions = spectral_embedding_2d(graph);
 
             let name = path
                 .file_name()
