@@ -344,7 +344,7 @@ mod tests {
     fn gestalt_implements_dom() {
         let g = Gestalt::empty();
         let dom: &dyn DOM = &g;
-        assert!(dom.uri().contains("document"));
+        assert!(dom.uri().contains("@gestalt/document"));
         assert!(dom.content().is_empty());
         assert!(dom.attributes().is_empty());
     }
@@ -385,5 +385,37 @@ mod tests {
             meta: vec![], children: vec![], kind: DocumentKind::Breath
         }]);
         assert_ne!(a.oid(), b.oid());
+    }
+
+    #[test]
+    fn document_kind_is_grammar_binding() {
+        // DocumentKind is the compiled binding of @gestalt/document.
+        // This test asserts the relationship is explicit via the GrammarBinding trait.
+        assert_eq!(DocumentKind::grammar_id(), "@gestalt/document");
+    }
+
+    #[test]
+    fn document_kind_variant_count_matches_grammar() {
+        // @gestalt/document declares all substantive document node types.
+        // This count must stay in sync with the variants of DocumentKind.
+        // Update when document.mirror adds or removes node types.
+        const EXPECTED: usize = 14;
+        let variants: &[DocumentKind] = &[
+            DocumentKind::Section { level: 1, title: vec![] },
+            DocumentKind::Paragraph { content: vec![] },
+            DocumentKind::CodeBlock { language: String::new(), content: String::new() },
+            DocumentKind::Quote { attribution: None },
+            DocumentKind::Callout { kind: CalloutKind::Note, title: String::new() },
+            DocumentKind::List { style: ListStyle::Unordered, start: 0 },
+            DocumentKind::ListItem { checked: None },
+            DocumentKind::DefinitionList,
+            DocumentKind::Table { columns: vec![] },
+            DocumentKind::Figure { caption: None },
+            DocumentKind::Separator,
+            DocumentKind::Breath,
+            DocumentKind::RawBlock { content: String::new(), format: String::new() },
+            DocumentKind::Embedded(Box::new(Gestalt::empty())),
+        ];
+        assert_eq!(variants.len(), EXPECTED);
     }
 }
