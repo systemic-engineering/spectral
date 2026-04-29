@@ -127,7 +127,7 @@ Key findings from Mara's research:
 - Loss has direction (mutation vs measurement) — may need two Loss types
 - The three stores aren't independent — linked through SpectralIndex
 - ManifoldStore is closest to Store shape already
-- `.conv` grammar and `schema.rs` parser are stale — mirror's parser replaces them
+- `.mirror` grammar via mirror's parser — `.conv` extension dropped, `schema.rs` parser removed
 - Mnesia integration structurally complete, has placeholder stubs
 
 ### 2.4 shard> prompt

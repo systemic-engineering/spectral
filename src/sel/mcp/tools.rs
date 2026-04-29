@@ -9,13 +9,13 @@ use serde_json::{json, Value};
 
 // ── Grammar scanning ──────────────────────────────────────────────
 
-/// An action extracted from a .conv/.mirror grammar file.
+/// An action extracted from a .mirror grammar file.
 pub struct GrammarAction {
     pub grammar_name: String,
     pub action_name: String,
 }
 
-/// Scan a project directory for .conv/.mirror files and extract grammar actions.
+/// Scan a project directory for .mirror files and extract grammar actions.
 pub fn scan_grammars(project_path: &str) -> Vec<GrammarAction> {
     let mut actions = Vec::new();
     let mut files = Vec::new();
@@ -27,7 +27,7 @@ pub fn scan_grammars(project_path: &str) -> Vec<GrammarAction> {
         for entry in entries.flatten() {
             let path = entry.path();
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if ext == "conv" || ext == "mirror" {
+                if ext == "mirror" {
                     files.push(path);
                 }
             }
@@ -136,6 +136,73 @@ pub fn builtin_tool_definitions() -> Vec<Value> {
                 "required": ["path"]
             }
         }),
+        // ── Git-native optics (memory_diff, memory_blame, memory_branch,
+        //    memory_checkout, memory_thread, memory_cherrypick) ───────────
+        json!({
+            "name": "memory_diff",
+            "description": "List nodes/edges/crystals/metadata added or removed between two refs on refs/spectral/HEAD. Defaults: from=HEAD~1, to=HEAD. Wraps `git diff-tree`. Returns structured JSON.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "from": { "type": "string", "description": "Source ref (default HEAD~1; e.g. 'HEAD~3', a branch, or an oid)" },
+                    "to":   { "type": "string", "description": "Destination ref (default HEAD)" }
+                }
+            }
+        }),
+        json!({
+            "name": "memory_blame",
+            "description": "Return the chronological commit chain that touched nodes/{oid}/. Wraps `git log --follow refs/spectral/HEAD -- nodes/{oid}/`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "oid": { "type": "string", "description": "OID of the node to blame" }
+                },
+                "required": ["oid"]
+            }
+        }),
+        json!({
+            "name": "memory_branch",
+            "description": "With `name`: create refs/spectral/heads/{name} at HEAD. Without `name`: list all spectral branches and their tips. Wraps `git update-ref refs/spectral/heads/{name} refs/spectral/HEAD`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Branch name to create. Omit to list all branches." }
+                }
+            }
+        }),
+        json!({
+            "name": "memory_checkout",
+            "description": "Repoint refs/spectral/HEAD (symref) to refs/spectral/heads/{name}. The MCP server's in-memory state is stale until restart; the response includes a note. Wraps `git symbolic-ref refs/spectral/HEAD refs/spectral/heads/{name}`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Existing branch name to switch to" }
+                },
+                "required": ["name"]
+            }
+        }),
+        json!({
+            "name": "memory_thread",
+            "description": "Walk a topic note thread chronologically. Tries refs/spectral/notes/topics/{topic}, falls back to refs/spectral/notes/{topic}. Built-in topics: hot-paths, pressure, ticks, wal-folded.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "topic": { "type": "string", "description": "Topic name, e.g. 'hot-paths' or a custom topic under notes/topics/" }
+                },
+                "required": ["topic"]
+            }
+        }),
+        json!({
+            "name": "memory_cherrypick",
+            "description": "Replay an existing same-repo commit's tree changes onto the current refs/spectral/HEAD. Cross-repo cherry-pick is not yet supported. The MCP server's in-memory state is stale until restart.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "commit_oid": { "type": "string", "description": "Hex OID of the commit to cherry-pick" }
+                },
+                "required": ["commit_oid"]
+            }
+        }),
         json!({
             "name": "graph_query",
             "description": "Execute a pipe-forward graph query. Syntax: `find <type> [|> where <field> <op> <value>] [|> sort by <field> [desc]] [|> limit <n>] [|> count]`. Sources: find, near, hot. Transforms: where, walk, sort, limit. Terminals: count, loss. Every query returns ShannonLoss — bits of information filtered out.",
@@ -216,6 +283,13 @@ mod tests {
         assert!(names.contains(&"spectral_loss"));
         assert!(names.contains(&"gestalt_detect"));
         assert!(names.contains(&"graph_query"));
+        // Git-native optics
+        assert!(names.contains(&"memory_diff"));
+        assert!(names.contains(&"memory_blame"));
+        assert!(names.contains(&"memory_branch"));
+        assert!(names.contains(&"memory_checkout"));
+        assert!(names.contains(&"memory_thread"));
+        assert!(names.contains(&"memory_cherrypick"));
     }
 
     #[test]

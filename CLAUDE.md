@@ -51,7 +51,7 @@ They map to optics, physics, biology, computation, and the Pack.
 ## MCP Server
 
 `spectral serve --project .` runs an MCP server over stdio.
-Scans `.conv` / `.mirror` files for grammar actions.
+Scans `.mirror` files for grammar actions.
 Generates MCP tools from grammar actions.
 Built-in tools: memory_recall, memory_crystallize, memory_status.
 

@@ -78,11 +78,18 @@ fn main() {
 
     let json_flag = args.iter().any(|a| a == "--json");
 
+    // First non-flag positional arg after the subcommand, or "." default.
+    // Without this, `spectral status --json` would treat `--json` as the path.
+    let positional_path = args[2..]
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .map(|s| s.as_str())
+        .unwrap_or(".");
+
     match args[1].as_str() {
         // Optic subcommands — typed by optic, zero inference cost
         "status" => {
-            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
-            let view = spectral::apache2::views::StatusView::from_session(Path::new(path));
+            let view = spectral::apache2::views::StatusView::from_session(Path::new(positional_path));
             if json_flag {
                 println!("{}", serde_json::to_string_pretty(&view).unwrap());
             } else {
@@ -91,8 +98,7 @@ fn main() {
         }
 
         "savings" => {
-            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
-            let view = spectral::apache2::views::SavingsView::from_session(Path::new(path));
+            let view = spectral::apache2::views::SavingsView::from_session(Path::new(positional_path));
             if json_flag {
                 println!("{}", serde_json::to_string_pretty(&view).unwrap());
             } else {
@@ -101,8 +107,7 @@ fn main() {
         }
 
         "loss" => {
-            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
-            let view = spectral::apache2::views::LossView::from_session(Path::new(path));
+            let view = spectral::apache2::views::LossView::from_session(Path::new(positional_path));
             if json_flag {
                 println!("{}", serde_json::to_string_pretty(&view).unwrap());
             } else {
@@ -111,8 +116,7 @@ fn main() {
         }
 
         "peers" => {
-            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
-            let view = spectral::apache2::views::PeersView::from_session(Path::new(path));
+            let view = spectral::apache2::views::PeersView::from_session(Path::new(positional_path));
             if json_flag {
                 println!("{}", serde_json::to_string_pretty(&view).unwrap());
             } else {
@@ -121,8 +125,7 @@ fn main() {
         }
 
         "crystal" => {
-            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
-            let view = spectral::apache2::views::CrystalView::from_session(Path::new(path));
+            let view = spectral::apache2::views::CrystalView::from_session(Path::new(positional_path));
             if json_flag {
                 println!("{}", serde_json::to_string_pretty(&view).unwrap());
             } else {
@@ -131,8 +134,7 @@ fn main() {
         }
 
         "benchmark" => {
-            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
-            let view = spectral::apache2::views::BenchmarkView::from_session(Path::new(path));
+            let view = spectral::apache2::views::BenchmarkView::from_session(Path::new(positional_path));
             if json_flag {
                 println!("{}", serde_json::to_string_pretty(&view).unwrap());
             } else {
@@ -321,8 +323,10 @@ fn main() {
         "index" => {
             let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
             let target = std::path::Path::new(path);
-            let (graph, _files, breakdown) = gestalt::graph::build_concept_graph(target);
-            let profile = gestalt::eigenvalue::eigenvalue_profile(&graph);
+            let cached = spectral::apache2::graph_cache::load_or_build(target);
+            let graph = &cached.graph;
+            let profile = &cached.profile;
+            let breakdown = &cached.breakdown;
             println!("indexed: {}", path);
             println!(
                 "  files:   {} (md:{} code:{} config:{} mirror:{})",
@@ -335,6 +339,11 @@ fn main() {
                 println!("  oid:     {}", profile.oid());
             } else {
                 println!("  fiedler: dark (no connectivity)");
+            }
+            if cached.from_cache {
+                println!("  source:  cached (.git/spectral/contexts/graph.json)");
+            } else {
+                println!("  source:  computed (gestalt scan)");
             }
             // Cascade + crystallize run via MCP (persistent actor state required)
             println!("  cascade: via mcp__spectral__spectral_index");
@@ -477,7 +486,7 @@ fn delegate(binary: &str, args: &[String]) {
 }
 
 /// Five operations — focus, project, split, zoom, refract.
-/// Each parses .mirror/.conv source into a content-addressed AST and prints the graph.
+/// Each parses .mirror source into a content-addressed AST and prints the graph.
 fn optic_cmd(op: &str, args: &[String]) {
     use mirror::parse::Parse;
     use mirror::Vector;
@@ -491,7 +500,7 @@ fn optic_cmd(op: &str, args: &[String]) {
             process::exit(1);
         })
     } else {
-        // Directory: scan for all .mirror/.conv files
+        // Directory: scan for all .mirror files
         eprintln!("spectral {} on directory: scanning {}", op, path);
         let mut combined = String::new();
         if let Ok(entries) = std::fs::read_dir(path) {
@@ -501,7 +510,7 @@ fn optic_cmd(op: &str, args: &[String]) {
                     let p = e.path();
                     p.extension()
                         .and_then(|x| x.to_str())
-                        .map_or(false, |ext| ext == "mirror" || ext == "conv")
+                        .map_or(false, |ext| ext == "mirror")
                 })
                 .collect();
             paths.sort_by_key(|e| e.path());
@@ -516,7 +525,7 @@ fn optic_cmd(op: &str, args: &[String]) {
     };
 
     if source.is_empty() {
-        eprintln!("spectral {}: no .mirror or .conv files in {}", op, path);
+        eprintln!("spectral {}: no .mirror files in {}", op, path);
         process::exit(1);
     }
 

@@ -21,6 +21,7 @@ pub mod compiler;
 mod integration_tests;
 pub mod lsp;
 pub mod memory;
+pub mod optics;
 pub mod server;
 pub mod supervisor;
 pub mod tools;

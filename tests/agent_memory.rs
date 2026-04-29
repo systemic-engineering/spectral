@@ -1,3 +1,9 @@
+// These tests depend on the `lens` crate, which is currently disabled
+// (see Cargo.toml — "Temporarily disabled — pending further integration").
+// They build only when the `lens-integration` feature is enabled AND the
+// lens crate compiles. Until then they are skipped from default test runs.
+#![cfg(feature = "lens-integration")]
+
 //! Integration tests for the agentic memory layer.
 //!
 //! These test the full lifecycle that a Claude Code agent runs:
