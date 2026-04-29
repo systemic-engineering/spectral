@@ -189,8 +189,8 @@ mod tests {
     fn any_gestalt_grammar_id_returns_domain_id() {
         let g = Gestalt::empty();
         let any = AnyGestalt::new(Oid::hash(b"lens"), g);
-        // Document::id() currently returns "document"
-        assert_eq!(any.grammar_id(), "document");
+        // Document::id() returns the grammar-native id
+        assert_eq!(any.grammar_id(), "@gestalt/document");
     }
 
     #[test]

@@ -293,7 +293,7 @@ mod tests {
 
     #[test]
     fn document_domain_id() {
-        assert_eq!(Document::id(), "document");
+        assert_eq!(Document::id(), "@gestalt/document");
     }
 
     #[test]
