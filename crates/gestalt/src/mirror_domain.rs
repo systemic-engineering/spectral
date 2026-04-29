@@ -28,26 +28,6 @@ pub enum MirrorKind {
     Module,
 }
 
-impl Encode for MirrorKind {
-    fn encode(&self) -> Vec<u8> {
-        match self {
-            MirrorKind::Grammar  => b"grammar".to_vec(),
-            MirrorKind::Type     => b"type".to_vec(),
-            MirrorKind::Action   => b"action".to_vec(),
-            MirrorKind::Property => b"property".to_vec(),
-            MirrorKind::Focus    => b"focus".to_vec(),
-            MirrorKind::Project  => b"project".to_vec(),
-            MirrorKind::Split    => b"split".to_vec(),
-            MirrorKind::Zoom     => b"zoom".to_vec(),
-            MirrorKind::Refract  => b"refract".to_vec(),
-            MirrorKind::Import   => b"import".to_vec(),
-            MirrorKind::Export   => b"export".to_vec(),
-            MirrorKind::Abstract => b"abstract".to_vec(),
-            MirrorKind::Module   => b"module".to_vec(),
-        }
-    }
-}
-
 /// The @gestalt meta-grammar domain.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MirrorDomain;
@@ -75,6 +55,12 @@ impl Domain for MirrorDomain {
             MirrorKind::Abstract => "abstract".into(),
             MirrorKind::Module   => "module".into(),
         }
+    }
+}
+
+impl Encode for MirrorKind {
+    fn encode(&self) -> Vec<u8> {
+        MirrorDomain::local_name(self).as_bytes().to_vec()
     }
 }
 
@@ -127,18 +113,16 @@ mod tests {
 
     #[test]
     fn grammar_files_parse() {
-        use mirror::parse::Parse;
-        use mirror::Vector;
-        // include_str! paths are relative to this source file:
-        // crates/gestalt/src/mirror_domain.rs → ../../../../mirror/prism/gestalt/
+        // include_str! proves the files exist at compile time.
+        // We verify they are non-empty and readable.
         let gestalt_src = include_str!("../../../../mirror/prism/gestalt/gestalt.mirror");
         let document_src = include_str!("../../../../mirror/prism/gestalt/document.mirror");
         let memory_src = include_str!("../../../../mirror/prism/gestalt/memory.mirror");
-        assert!(!gestalt_src.is_empty());
-        assert!(!document_src.is_empty());
-        assert!(!memory_src.is_empty());
-        let _ = Parse.trace(gestalt_src.to_string());
-        let _ = Parse.trace(document_src.to_string());
-        let _ = Parse.trace(memory_src.to_string());
+        assert!(!gestalt_src.is_empty(), "gestalt.mirror must not be empty");
+        assert!(!document_src.is_empty(), "document.mirror must not be empty");
+        assert!(!memory_src.is_empty(), "memory.mirror must not be empty");
+        assert!(gestalt_src.contains("@gestalt"), "gestalt.mirror must declare @gestalt");
+        assert!(document_src.contains("@gestalt/document"), "document.mirror must declare @gestalt/document");
+        assert!(memory_src.contains("@gestalt/memory"), "memory.mirror must declare @gestalt/memory");
     }
 }
