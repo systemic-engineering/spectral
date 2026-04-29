@@ -23,6 +23,7 @@
 //! - `eigenvalue` — eigenvalue decomposition for spectral fingerprints
 
 pub mod detect;
+pub mod line;
 pub mod document;
 pub mod dom;
 pub mod domain;
