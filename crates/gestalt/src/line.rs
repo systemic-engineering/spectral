@@ -1,4 +1,161 @@
 //! line — GestaltDoc, AnyGestalt, Annotations, RenderContext, Line<D>.
+//!
+//! A Line<D> = Optic<RenderContext, Node<D>, Infallible, Annotations>
+//!
+//! - In:   RenderContext — parent OIDs, depth, cursor (the structural context)
+//! - Out:  Node<D>       — the content node (unchanged by lens application)
+//! - Loss: Annotations   — named cross-domain lens results accumulate here
+
+use std::sync::Arc;
+use std::convert::Infallible;
+use prism_core::named::Named;
+use prism_core::oid::{Addressable, Oid};
+use prism_core::beam::Optic;
+use terni::Loss;
+
+// ---------------------------------------------------------------------------
+// GestaltDoc — object-safe trait for type-erased Gestalt<E>
+// ---------------------------------------------------------------------------
+
+/// Object-safe interface over Gestalt<E> for any grammar E.
+pub trait GestaltDoc: Send + Sync {
+    fn doc_oid(&self) -> Oid;
+    fn grammar_id(&self) -> &'static str;
+}
+
+impl<D> GestaltDoc for crate::domain::Gestalt<D>
+where
+    D: crate::domain::Domain + Send + Sync + 'static,
+    D::Language: Send + Sync,
+{
+    fn doc_oid(&self) -> Oid {
+        crate::domain::Gestalt::oid(self)
+    }
+
+    fn grammar_id(&self) -> &'static str {
+        D::id()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AnyGestalt
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+pub struct AnyGestalt {
+    pub lens_oid: Oid,
+    pub content: Arc<dyn GestaltDoc>,
+}
+
+impl AnyGestalt {
+    pub fn new<D>(lens_oid: Oid, gestalt: crate::domain::Gestalt<D>) -> Self
+    where
+        D: crate::domain::Domain + Send + Sync + 'static,
+        D::Language: Send + Sync,
+    {
+        AnyGestalt {
+            lens_oid,
+            content: Arc::new(gestalt),
+        }
+    }
+
+    pub fn grammar_id(&self) -> &'static str {
+        self.content.grammar_id()
+    }
+}
+
+impl Addressable for AnyGestalt {
+    fn oid(&self) -> Oid {
+        self.lens_oid.clone()
+    }
+}
+
+impl std::fmt::Debug for AnyGestalt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AnyGestalt")
+            .field("lens_oid", &self.lens_oid)
+            .field("grammar_id", &self.content.grammar_id())
+            .finish()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Annotations — named Loss type for cross-domain lens results
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Default)]
+pub struct Annotations(pub Vec<Named<AnyGestalt>>);
+
+impl Annotations {
+    pub fn singleton(name: &'static str, content: AnyGestalt) -> Self {
+        Annotations(vec![Named(name, content)])
+    }
+
+    pub fn entries(&self) -> &[Named<AnyGestalt>] {
+        &self.0
+    }
+}
+
+impl Loss for Annotations {
+    fn zero() -> Self { Annotations(Vec::new()) }
+    fn total() -> Self { Annotations(Vec::new()) }
+    fn is_zero(&self) -> bool { self.0.is_empty() }
+    fn combine(self, other: Self) -> Self {
+        let mut v = self.0;
+        v.extend(other.0);
+        Annotations(v)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RenderContext — structural context for a line
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug)]
+pub struct RenderContext {
+    pub parent_oids: Vec<Oid>,
+    pub depth: usize,
+    pub cursor: usize,
+}
+
+impl RenderContext {
+    pub fn root() -> Self {
+        RenderContext { parent_oids: Vec::new(), depth: 0, cursor: 0 }
+    }
+
+    pub fn child(&self, parent_oid: Oid, cursor: usize) -> Self {
+        let mut oids = self.parent_oids.clone();
+        oids.push(parent_oid);
+        RenderContext { parent_oids: oids, depth: self.depth + 1, cursor }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Line<D> = Optic<RenderContext, Node<D>, Infallible, Annotations>
+// ---------------------------------------------------------------------------
+
+pub type Line<D> = Optic<RenderContext, crate::domain::Node<D>, Infallible, Annotations>;
+
+/// Construct a bare Line<D> with zero annotations.
+pub fn make_line<D: crate::domain::Domain>(
+    ctx: RenderContext,
+    node: crate::domain::Node<D>,
+) -> Line<D> {
+    Optic::ok(ctx, node)
+}
+
+/// Construct a Line<D> with pre-existing annotations.
+pub fn make_line_with_annotations<D: crate::domain::Domain>(
+    ctx: RenderContext,
+    node: crate::domain::Node<D>,
+    annotations: Annotations,
+) -> Line<D> {
+    Optic::partial(ctx, node, annotations)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
