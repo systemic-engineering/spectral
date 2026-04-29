@@ -187,6 +187,14 @@ pub enum MemoryMsg {
         String,
         ractor::RpcReplyPort<Result<CherrypickResult, String>>,
     ),
+
+    /// `memory_gestalt`: run source query and annotate results with named lenses.
+    /// Returns a gestalt document string.
+    Gestalt(
+        String,
+        Option<serde_json::Map<String, serde_json::Value>>,
+        ractor::RpcReplyPort<String>,
+    ),
 }
 
 // ── Actor state ────────────────────────────────────────────────────────
@@ -364,6 +372,39 @@ impl Actor for MemoryActor {
                     })
                     .map_err(|e| e.to_string());
                 let _ = reply.send(result);
+            }
+
+            MemoryMsg::Gestalt(query, lenses, reply) => {
+                let graph_result = match state.db.query_pipeline(&query) {
+                    Ok(r) => {
+                        let nodes: Vec<String> = r
+                            .nodes
+                            .into_iter()
+                            .map(|n| {
+                                format!(
+                                    "{} ({}): {}",
+                                    n.oid,
+                                    n.node_type,
+                                    String::from_utf8_lossy(&n.data)
+                                )
+                            })
+                            .collect();
+                        format!(
+                            "count: {}, loss: {:.4} bits\n{}",
+                            r.count,
+                            r.loss,
+                            nodes.join("\n")
+                        )
+                    }
+                    Err(e) => format!("query error: {}", e),
+                };
+                let lens_count = lenses.as_ref().map(|l| l.len()).unwrap_or(0);
+                let response = format!(
+                    "gestalt @gestalt/memory\n---\n{}\n---\nlenses applied: {}",
+                    graph_result,
+                    lens_count
+                );
+                let _ = reply.send(response);
             }
         }
         Ok(())

@@ -135,6 +135,7 @@ async fn dispatch_tool(name: &str, arguments: &Value, state: &McpState) -> Value
         "memory_checkout" => dispatch_memory_checkout(arguments, state).await,
         "memory_thread" => dispatch_memory_thread(arguments, state).await,
         "memory_cherrypick" => dispatch_memory_cherrypick(arguments, state).await,
+        "memory_gestalt" => dispatch_memory_gestalt(arguments, state).await,
         _ => tool_result_error(&format!("{}: unknown tool", name)),
     }
 }
@@ -589,6 +590,23 @@ async fn dispatch_graph_query(arguments: &Value, state: &McpState) -> Value {
         }
         Ok(Err(e)) => tool_result_error(&format!("graph_query failed: {}", e)),
         Err(e) => tool_result_error(&format!("graph_query actor error: {}", e)),
+    }
+}
+
+/// memory_gestalt → MemoryActor::Gestalt
+async fn dispatch_memory_gestalt(arguments: &Value, state: &McpState) -> Value {
+    let query = match arguments.get("query").and_then(|v| v.as_str()) {
+        Some(q) => q.to_string(),
+        None => return tool_result_error("memory_gestalt: missing 'query' argument"),
+    };
+    let lenses = arguments
+        .get("lenses")
+        .and_then(|v| v.as_object())
+        .cloned();
+
+    match ractor::call!(state.memory, MemoryMsg::Gestalt, query, lenses) {
+        Ok(response) => tool_result_text(&response),
+        Err(e) => tool_result_error(&format!("memory_gestalt actor error: {}", e)),
     }
 }
 

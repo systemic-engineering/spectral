@@ -214,6 +214,18 @@ pub fn builtin_tool_definitions() -> Vec<Value> {
                 "required": ["query"]
             }
         }),
+        json!({
+            "name": "memory_gestalt",
+            "description": "Traversal<ConceptGraph, Line<@gestalt/memory>> — query the memory graph and annotate results with named lenses. Each lens is a pipe-forward mirror query. Returns a gestalt document.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query":  { "type": "string", "description": "Source query: 'find observation |> where fiedler > 0.04'" },
+                    "lenses": { "type": "object", "description": "Named lens map: { \"blame\": \"find blame |> ...\", \"summary\": \"...\" }" }
+                },
+                "required": ["query"]
+            }
+        }),
     ]
 }
 
