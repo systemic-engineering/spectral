@@ -9,6 +9,16 @@ use crate::semantic::{CalloutKind, Meta};
 use prism_core::oid::Oid;
 use std::borrow::Cow;
 
+/// Marker trait: a Rust type that is the compiled binding of a `.mirror` grammar.
+///
+/// Types implementing this trait are NOT the source of truth — the grammar file is.
+/// They exist because a grammar compiler to auto-generate Rust bindings does not yet
+/// exist. When the compiler ships, implementors of this trait become generated code.
+pub trait GrammarBinding {
+    /// The grammar id this type was compiled from.
+    fn grammar_id() -> &'static str;
+}
+
 /// The tree's vocabulary. Defines the domain's language.
 pub trait Domain: Clone + std::fmt::Debug + PartialEq + Eq {
     type Language: Clone + std::fmt::Debug + PartialEq + Eq + Encode;
@@ -71,7 +81,12 @@ impl<D: Domain> Gestalt<D> {
     }
 }
 
-/// What kind of document node this is.
+/// Node kind for the `@gestalt/document` grammar.
+///
+/// This is the compiled binding of `mirror/prism/gestalt/document.mirror`.
+/// The `.mirror` file is the source of truth. This enum exists until the
+/// grammar compiler ships; see [`GrammarBinding`].
+///
 /// Carries only variant-specific data. No children, no meta — those are on Node<D>.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DocumentKind {
@@ -143,6 +158,12 @@ impl Encode for DocumentKind {
             DocumentKind::Embedded(_) => "embedded".into(),
         };
         s.into_bytes()
+    }
+}
+
+impl GrammarBinding for DocumentKind {
+    fn grammar_id() -> &'static str {
+        "@gestalt/document"
     }
 }
 
