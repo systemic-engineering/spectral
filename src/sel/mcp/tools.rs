@@ -290,6 +290,7 @@ mod tests {
         assert!(names.contains(&"memory_checkout"));
         assert!(names.contains(&"memory_thread"));
         assert!(names.contains(&"memory_cherrypick"));
+        assert!(names.contains(&"memory_gestalt"));
     }
 
     #[test]
