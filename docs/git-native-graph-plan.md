@@ -111,7 +111,7 @@ tree (root)
 │   ├── {crystal_oid_1}       blob (crystal record JSON; or a tree pointing to commit)
 │   └── ...
 ├── profile                   blob (eigenvalue profile, see 3.4)
-├── schema                    blob (.conv schema source — the grammar in effect for this state)
+├── schema                    blob (.mirror schema source — the grammar in effect for this state)
 └── manifest                  blob (top-level metadata: node_count, edge_count, fast_oid, full_oid, fiedler)
 ```
 
@@ -578,7 +578,7 @@ If the MCP server accepts simultaneous writes (multi-agent), the CAS update of `
 
 ### R4 — OID stability across mirror grammar bumps (resolved: mirver)
 
-If the `.mirror`/`.conv` parser changes shape, the same content produces different OIDs. Cross-repo cherrypick would break; old crystals would become unreachable.
+If the `.mirror` parser changes shape, the same content produces different OIDs. Cross-repo cherrypick would break; old crystals would become unreachable.
 
 **Mitigation: structural semver via mirver.** A "mirver" is `spectral_hash(beta_normal(MirrorAST))` — the spectral hash of the mirror compiler's own AST in beta-normal form. The compiler proves its own version structurally; no human declares it.
 

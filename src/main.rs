@@ -486,7 +486,7 @@ fn delegate(binary: &str, args: &[String]) {
 }
 
 /// Five operations — focus, project, split, zoom, refract.
-/// Each parses .mirror/.conv source into a content-addressed AST and prints the graph.
+/// Each parses .mirror source into a content-addressed AST and prints the graph.
 fn optic_cmd(op: &str, args: &[String]) {
     use mirror::parse::Parse;
     use mirror::Vector;
@@ -500,7 +500,7 @@ fn optic_cmd(op: &str, args: &[String]) {
             process::exit(1);
         })
     } else {
-        // Directory: scan for all .mirror/.conv files
+        // Directory: scan for all .mirror files
         eprintln!("spectral {} on directory: scanning {}", op, path);
         let mut combined = String::new();
         if let Ok(entries) = std::fs::read_dir(path) {
@@ -510,7 +510,7 @@ fn optic_cmd(op: &str, args: &[String]) {
                     let p = e.path();
                     p.extension()
                         .and_then(|x| x.to_str())
-                        .map_or(false, |ext| ext == "mirror" || ext == "conv")
+                        .map_or(false, |ext| ext == "mirror")
                 })
                 .collect();
             paths.sort_by_key(|e| e.path());
@@ -525,7 +525,7 @@ fn optic_cmd(op: &str, args: &[String]) {
     };
 
     if source.is_empty() {
-        eprintln!("spectral {}: no .mirror or .conv files in {}", op, path);
+        eprintln!("spectral {}: no .mirror files in {}", op, path);
         process::exit(1);
     }
 

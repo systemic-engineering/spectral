@@ -9,13 +9,13 @@ use serde_json::{json, Value};
 
 // ── Grammar scanning ──────────────────────────────────────────────
 
-/// An action extracted from a .conv/.mirror grammar file.
+/// An action extracted from a .mirror grammar file.
 pub struct GrammarAction {
     pub grammar_name: String,
     pub action_name: String,
 }
 
-/// Scan a project directory for .conv/.mirror files and extract grammar actions.
+/// Scan a project directory for .mirror files and extract grammar actions.
 pub fn scan_grammars(project_path: &str) -> Vec<GrammarAction> {
     let mut actions = Vec::new();
     let mut files = Vec::new();
@@ -27,7 +27,7 @@ pub fn scan_grammars(project_path: &str) -> Vec<GrammarAction> {
         for entry in entries.flatten() {
             let path = entry.path();
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if ext == "conv" || ext == "mirror" {
+                if ext == "mirror" {
                     files.push(path);
                 }
             }
