@@ -83,6 +83,10 @@ impl std::fmt::Debug for AnyGestalt {
 // Annotations — named Loss type for cross-domain lens results
 // ---------------------------------------------------------------------------
 
+/// Named cross-domain annotation accumulator. The Loss type for Line<D>.
+///
+/// Zero = no annotations. combine = concat. Each applied lens adds one entry.
+/// `Named<AnyGestalt>` pairs a lens label with the gestalt it produced.
 #[derive(Clone, Debug, Default)]
 pub struct Annotations(pub Vec<Named<AnyGestalt>>);
 
@@ -98,7 +102,16 @@ impl Annotations {
 
 impl Loss for Annotations {
     fn zero() -> Self { Annotations(Vec::new()) }
-    fn total() -> Self { Annotations(Vec::new()) }
+    fn total() -> Self {
+        // Annotations has no meaningful absorbing-element.
+        // Annotations are additive accumulators — they grow, never saturate.
+        // We intentionally return empty (same as zero) and accept that
+        // total().combine(singleton) == singleton, not total().
+        // This deviates from the Loss absorbing-element contract.
+        // Dark-beam propagation through Optic<_, _, _, Annotations> will
+        // carry zero annotations on the error path, which is correct behavior.
+        Annotations(Vec::new())
+    }
     fn is_zero(&self) -> bool { self.0.is_empty() }
     fn combine(self, other: Self) -> Self {
         let mut v = self.0;
@@ -261,5 +274,20 @@ mod tests {
         };
         let line = make_line(RenderContext::root(), node);
         assert!(line.value().is_some());
+    }
+
+    #[test]
+    fn annotations_total_is_non_absorbing_by_design() {
+        // Document the intentional deviation from Loss absorbing-element contract.
+        // total().combine(x) returns x (not total()), because annotations
+        // are additive — there is no "all information lost" state for annotations.
+        let total = Annotations::total();
+        let singleton = Annotations::singleton(
+            "test",
+            AnyGestalt::new(Oid::hash(b"lens"), Gestalt::empty()),
+        );
+        let combined = total.combine(singleton.clone());
+        assert_eq!(combined.0.len(), 1, "total() + singleton = singleton (non-absorbing)");
+        assert!(Annotations::total().is_zero());
     }
 }
