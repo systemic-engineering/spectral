@@ -5,8 +5,11 @@
 //! (Mutex-based), but single-owner actor means no deadlock risk.
 
 use ractor::{Actor, ActorProcessingErr, ActorRef};
+use serde::{Deserialize, Serialize};
 use spectral_db::crystallize::Crystal;
 use spectral_db::{DbStatus, SpectralDb};
+
+use super::optics;
 
 // ── Reply types ────────────────────────────────────────────────────────
 
@@ -33,6 +36,83 @@ pub struct QueryNode {
     pub oid: String,
     pub node_type: String,
     pub data: String,
+}
+
+// ── Git-native optics reply types ─────────────────────────────────────
+
+/// Diff between two commits, classified by spectral path prefix.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiffReport {
+    pub from: String,
+    pub to: String,
+    pub added_nodes: Vec<String>,
+    pub removed_nodes: Vec<String>,
+    pub changed_nodes: Vec<String>,
+    pub added_edges: Vec<EdgeRef>,
+    pub removed_edges: Vec<EdgeRef>,
+    pub added_crystals: Vec<String>,
+    pub removed_crystals: Vec<String>,
+    pub metadata_changed: Vec<String>,
+}
+
+/// A from→to edge reference identified by node OIDs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdgeRef {
+    pub from: String,
+    pub to: String,
+}
+
+/// One commit on a node's blame chain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlameEntry {
+    pub commit_oid: String,
+    pub message: String,
+    pub timestamp: i64,
+    pub author: String,
+    /// Fiedler eigenvalue of the graph at this commit, if the `profile` blob
+    /// was present in the commit's tree (Phase 4+). `None` for older commits.
+    pub fiedler_at_commit: Option<f64>,
+}
+
+/// One branch tip for `memory_branch` list mode.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchTip {
+    pub name: String,
+    pub commit_oid: String,
+}
+
+/// Result of `memory_branch` (either a created branch or a list).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum BranchResult {
+    Created { ref_name: String, commit_oid: String },
+    List { branches: Vec<BranchTip> },
+}
+
+/// Result of `memory_checkout`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckoutResult {
+    pub branch: String,
+    pub commit_oid: String,
+    /// Caller-visible note: in-memory state may be stale until restart.
+    pub note: String,
+}
+
+/// One entry on a topic-note thread.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadEntry {
+    pub commit_oid: String,
+    pub timestamp: i64,
+    pub body: String,
+}
+
+/// Result of `memory_cherrypick`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CherrypickResult {
+    pub source_commit: String,
+    pub new_head: String,
+    /// Caller-visible note: in-memory state may be stale until restart.
+    pub note: String,
 }
 
 // ── Messages ───────────────────────────────────────────────────────────
@@ -76,6 +156,37 @@ pub enum MemoryMsg {
     /// edges to token/compound nodes, discover coincidence edges across
     /// nodes that share tokens. Reply: Ok(edge_count) or Err(reason).
     IngestAll(String, ractor::RpcReplyPort<Result<usize, String>>),
+
+    // ── Git-native optics ─────────────────────────────────────────────
+
+    /// `memory_diff`: classify changes between two refs (defaults to HEAD~1..HEAD).
+    Diff(
+        Option<String>,
+        Option<String>,
+        ractor::RpcReplyPort<Result<DiffReport, String>>,
+    ),
+
+    /// `memory_blame`: return the commit chain that touched `nodes/{oid}/`.
+    Blame(String, ractor::RpcReplyPort<Result<Vec<BlameEntry>, String>>),
+
+    /// `memory_branch`: with `Some(name)` create branch at HEAD; with `None` list branches.
+    Branch(
+        Option<String>,
+        ractor::RpcReplyPort<Result<BranchResult, String>>,
+    ),
+
+    /// `memory_checkout`: switch the active spectral branch (repoint symref HEAD).
+    Checkout(String, ractor::RpcReplyPort<Result<CheckoutResult, String>>),
+
+    /// `memory_thread`: walk all notes attached on `refs/spectral/notes/topics/{topic}`
+    /// (or `refs/spectral/notes/{topic}` as fallback) chronologically.
+    Thread(String, ractor::RpcReplyPort<Result<Vec<ThreadEntry>, String>>),
+
+    /// `memory_cherrypick`: replay `commit_oid`'s tree changes onto current HEAD.
+    Cherrypick(
+        String,
+        ractor::RpcReplyPort<Result<CherrypickResult, String>>,
+    ),
 }
 
 // ── Actor state ────────────────────────────────────────────────────────
@@ -201,6 +312,36 @@ impl Actor for MemoryActor {
                         results.iter().map(|r| r.coincidence_edges).sum()
                     })
                     .map_err(|e| e.to_string());
+                let _ = reply.send(result);
+            }
+
+            MemoryMsg::Diff(from, to, reply) => {
+                let result = optics::diff(state.db.repo_path(), from.as_deref(), to.as_deref());
+                let _ = reply.send(result);
+            }
+
+            MemoryMsg::Blame(oid, reply) => {
+                let result = optics::blame(state.db.repo_path(), &oid);
+                let _ = reply.send(result);
+            }
+
+            MemoryMsg::Branch(name, reply) => {
+                let result = optics::branch(state.db.repo_path(), name.as_deref());
+                let _ = reply.send(result);
+            }
+
+            MemoryMsg::Checkout(name, reply) => {
+                let result = optics::checkout(state.db.repo_path(), &name);
+                let _ = reply.send(result);
+            }
+
+            MemoryMsg::Thread(topic, reply) => {
+                let result = optics::thread(state.db.repo_path(), &topic);
+                let _ = reply.send(result);
+            }
+
+            MemoryMsg::Cherrypick(commit_oid, reply) => {
+                let result = optics::cherrypick(state.db.repo_path(), &commit_oid);
                 let _ = reply.send(result);
             }
 

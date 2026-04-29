@@ -333,20 +333,24 @@ mod tests {
                 .expect("read refs dir")
                 .count()
         } else {
-            // packed-refs: check refs/spectral/head file as proxy for flush having run
-            // (graph is now a git tree commit, not edges.json)
-            let head_ref_path = dir.path().join(".git/refs/spectral/head");
+            // Phase 2: refs/spectral/HEAD is a symref to refs/spectral/heads/main.
+            // Check for either the new ref or the legacy `refs/spectral/head`.
+            let main_ref_path = dir.path().join(".git/refs/spectral/heads/main");
+            let legacy_head_path = dir.path().join(".git/refs/spectral/head");
             let packed_refs = dir.path().join(".git/packed-refs");
-            let has_head = head_ref_path.exists()
+            let has_head = main_ref_path.exists()
+                || legacy_head_path.exists()
                 || (packed_refs.exists()
-                    && std::fs::read_to_string(&packed_refs)
-                        .unwrap_or_default()
-                        .contains("refs/spectral/head"));
+                    && {
+                        let contents = std::fs::read_to_string(&packed_refs).unwrap_or_default();
+                        contents.contains("refs/spectral/heads/main")
+                            || contents.contains("refs/spectral/head")
+                    });
             assert!(
                 has_head,
-                "refs/spectral/head must exist after RunCascade (flush proof)"
+                "refs/spectral/HEAD (heads/main) must exist after RunCascade (settle proof)"
             );
-            1 // graph commit proves flush ran
+            1 // graph commit proves settle ran
         };
         assert!(
             ref_count >= 1,
@@ -559,17 +563,22 @@ mod tests {
                 "cascade must create edges, got 0"
             );
 
-            // Step 4: Check graph tree commit exists (refs/spectral/head)
-            let head_ref_path = db_path.join(".git/refs/spectral/head");
+            // Step 4: Check graph tree commit exists at refs/spectral/HEAD
+            // (Phase 2 symref to refs/spectral/heads/main).
+            let main_ref_path = db_path.join(".git/refs/spectral/heads/main");
+            let legacy_head_path = db_path.join(".git/refs/spectral/head");
             let packed_refs = db_path.join(".git/packed-refs");
-            let has_head = head_ref_path.exists()
+            let has_head = main_ref_path.exists()
+                || legacy_head_path.exists()
                 || (packed_refs.exists()
-                    && std::fs::read_to_string(&packed_refs)
-                        .unwrap_or_default()
-                        .contains("refs/spectral/head"));
+                    && {
+                        let contents = std::fs::read_to_string(&packed_refs).unwrap_or_default();
+                        contents.contains("refs/spectral/heads/main")
+                            || contents.contains("refs/spectral/head")
+                    });
             assert!(
                 has_head,
-                "refs/spectral/head must exist after cascade+flush"
+                "refs/spectral/HEAD (heads/main) must exist after cascade+settle"
             );
 
             cascade_ref.stop(None);

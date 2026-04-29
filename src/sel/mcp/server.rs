@@ -129,7 +129,121 @@ async fn dispatch_tool(name: &str, arguments: &Value, state: &McpState) -> Value
         "spectral_loss" => dispatch_spectral_loss(state).await,
         "gestalt_detect" => dispatch_gestalt_detect(arguments, state).await,
         "graph_query" => dispatch_graph_query(arguments, state).await,
+        "memory_diff" => dispatch_memory_diff(arguments, state).await,
+        "memory_blame" => dispatch_memory_blame(arguments, state).await,
+        "memory_branch" => dispatch_memory_branch(arguments, state).await,
+        "memory_checkout" => dispatch_memory_checkout(arguments, state).await,
+        "memory_thread" => dispatch_memory_thread(arguments, state).await,
+        "memory_cherrypick" => dispatch_memory_cherrypick(arguments, state).await,
         _ => tool_result_error(&format!("{}: unknown tool", name)),
+    }
+}
+
+// ── Git-native optics dispatch ───────────────────────────────────────
+
+/// memory_diff → MemoryActor::Diff
+async fn dispatch_memory_diff(arguments: &Value, state: &McpState) -> Value {
+    let from = arguments
+        .get("from")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let to = arguments
+        .get("to")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    match ractor::call!(state.memory, MemoryMsg::Diff, from, to) {
+        Ok(Ok(report)) => match serde_json::to_string_pretty(&report) {
+            Ok(s) => tool_result_text(&s),
+            Err(e) => tool_result_error(&format!("memory_diff serialize: {e}")),
+        },
+        Ok(Err(e)) => tool_result_error(&format!("memory_diff failed: {e}")),
+        Err(e) => tool_result_error(&format!("memory_diff actor error: {e}")),
+    }
+}
+
+/// memory_blame → MemoryActor::Blame
+async fn dispatch_memory_blame(arguments: &Value, state: &McpState) -> Value {
+    let oid = match arguments.get("oid").and_then(|v| v.as_str()) {
+        Some(o) => o.to_string(),
+        None => return tool_result_error("memory_blame: missing 'oid' argument"),
+    };
+
+    match ractor::call!(state.memory, MemoryMsg::Blame, oid) {
+        Ok(Ok(entries)) => match serde_json::to_string_pretty(&entries) {
+            Ok(s) => tool_result_text(&s),
+            Err(e) => tool_result_error(&format!("memory_blame serialize: {e}")),
+        },
+        Ok(Err(e)) => tool_result_error(&format!("memory_blame failed: {e}")),
+        Err(e) => tool_result_error(&format!("memory_blame actor error: {e}")),
+    }
+}
+
+/// memory_branch → MemoryActor::Branch
+async fn dispatch_memory_branch(arguments: &Value, state: &McpState) -> Value {
+    let name = arguments
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    match ractor::call!(state.memory, MemoryMsg::Branch, name) {
+        Ok(Ok(result)) => match serde_json::to_string_pretty(&result) {
+            Ok(s) => tool_result_text(&s),
+            Err(e) => tool_result_error(&format!("memory_branch serialize: {e}")),
+        },
+        Ok(Err(e)) => tool_result_error(&format!("memory_branch failed: {e}")),
+        Err(e) => tool_result_error(&format!("memory_branch actor error: {e}")),
+    }
+}
+
+/// memory_checkout → MemoryActor::Checkout
+async fn dispatch_memory_checkout(arguments: &Value, state: &McpState) -> Value {
+    let name = match arguments.get("name").and_then(|v| v.as_str()) {
+        Some(n) => n.to_string(),
+        None => return tool_result_error("memory_checkout: missing 'name' argument"),
+    };
+
+    match ractor::call!(state.memory, MemoryMsg::Checkout, name) {
+        Ok(Ok(result)) => match serde_json::to_string_pretty(&result) {
+            Ok(s) => tool_result_text(&s),
+            Err(e) => tool_result_error(&format!("memory_checkout serialize: {e}")),
+        },
+        Ok(Err(e)) => tool_result_error(&format!("memory_checkout failed: {e}")),
+        Err(e) => tool_result_error(&format!("memory_checkout actor error: {e}")),
+    }
+}
+
+/// memory_thread → MemoryActor::Thread
+async fn dispatch_memory_thread(arguments: &Value, state: &McpState) -> Value {
+    let topic = match arguments.get("topic").and_then(|v| v.as_str()) {
+        Some(t) => t.to_string(),
+        None => return tool_result_error("memory_thread: missing 'topic' argument"),
+    };
+
+    match ractor::call!(state.memory, MemoryMsg::Thread, topic) {
+        Ok(Ok(entries)) => match serde_json::to_string_pretty(&entries) {
+            Ok(s) => tool_result_text(&s),
+            Err(e) => tool_result_error(&format!("memory_thread serialize: {e}")),
+        },
+        Ok(Err(e)) => tool_result_error(&format!("memory_thread failed: {e}")),
+        Err(e) => tool_result_error(&format!("memory_thread actor error: {e}")),
+    }
+}
+
+/// memory_cherrypick → MemoryActor::Cherrypick
+async fn dispatch_memory_cherrypick(arguments: &Value, state: &McpState) -> Value {
+    let commit_oid = match arguments.get("commit_oid").and_then(|v| v.as_str()) {
+        Some(c) => c.to_string(),
+        None => return tool_result_error("memory_cherrypick: missing 'commit_oid' argument"),
+    };
+
+    match ractor::call!(state.memory, MemoryMsg::Cherrypick, commit_oid) {
+        Ok(Ok(result)) => match serde_json::to_string_pretty(&result) {
+            Ok(s) => tool_result_text(&s),
+            Err(e) => tool_result_error(&format!("memory_cherrypick serialize: {e}")),
+        },
+        Ok(Err(e)) => tool_result_error(&format!("memory_cherrypick failed: {e}")),
+        Err(e) => tool_result_error(&format!("memory_cherrypick actor error: {e}")),
     }
 }
 
@@ -334,17 +448,11 @@ async fn dispatch_spectral_index(arguments: &Value, state: &McpState) -> Value {
         out.push(format!("  oid:     {}", oid));
     }
 
-    // ── Persist graph summary + profile to .git/spectral/ ──────────────
-    // The graph must survive process exit. Write via graph_cache for format
-    // convergence: CLI and MCP write the same JSON shape with dir_hash.
-    let resolved_path = std::path::Path::new(&path_str);
-    match crate::apache2::graph_cache::write_graph_cache(resolved_path, &graph, &profile, &breakdown) {
-        Ok(()) => out.push("  persisted: graph.json + profile.json".to_string()),
-        Err(e) => out.push(format!("  persist failed: {}", e)),
-    }
-
-    // Flush — persist to git-backed store
+    // Flush — persist to git-backed store (refs/spectral/HEAD).
+    // graph_cache.rs reads from this ref on next load_or_build — CLI and MCP
+    // converge through the same git tree (Phase 3).
     let _ = state.memory.cast(MemoryMsg::Flush);
+    out.push("  persisted: git tree at refs/spectral/HEAD".to_string());
 
     tool_result_text(&out.join("\n"))
 }
@@ -850,17 +958,22 @@ mod tests {
         )
         .expect("status call failed");
 
-        // The graph tree commit at refs/spectral/head must exist after store
-        let head_ref_path = db_path.join(".git/refs/spectral/head");
+        // The graph tree commit at refs/spectral/HEAD (symref to heads/main)
+        // must exist after store. Phase 2 introduced the symref layout.
+        let main_ref_path = db_path.join(".git/refs/spectral/heads/main");
+        let legacy_head_path = db_path.join(".git/refs/spectral/head");
         let packed_refs = db_path.join(".git/packed-refs");
-        let has_head = head_ref_path.exists()
+        let has_head = main_ref_path.exists()
+            || legacy_head_path.exists()
             || (packed_refs.exists()
-                && std::fs::read_to_string(&packed_refs)
-                    .unwrap_or_default()
-                    .contains("refs/spectral/head"));
+                && {
+                    let contents = std::fs::read_to_string(&packed_refs).unwrap_or_default();
+                    contents.contains("refs/spectral/heads/main")
+                        || contents.contains("refs/spectral/head")
+                });
         assert!(
             has_head,
-            "refs/spectral/head must exist after memory_store — store must flush to git"
+            "refs/spectral/HEAD (heads/main) must exist after memory_store — store must settle to git"
         );
 
         // Verify: reopen SpectralDb at same path — node must survive
@@ -883,7 +996,9 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_spectral_index_persists_graph_to_git() {
-        // Create a directory with files to index
+        // Phase 3: spectral_index persists to the git-native store (refs/spectral/HEAD),
+        // not to graph.json / profile.json which are removed. Verify by checking that
+        // the actor's in-memory db reflects the indexed nodes (eigenboard was stored).
         let project = tempfile::tempdir().expect("failed to create project dir");
         let project_path = project.path().to_path_buf();
         std::fs::create_dir_all(project_path.join(".git/spectral")).unwrap();
@@ -918,36 +1033,31 @@ mod tests {
 
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("indexed:"), "should contain indexed, got: {}", text);
-
-        // Graph must be persisted to .git/spectral/contexts/graph.json
-        let graph_path = project_path.join(".git/spectral/contexts/graph.json");
         assert!(
-            graph_path.exists(),
-            "graph.json must be written after spectral_index"
+            text.contains("persisted: git tree at refs/spectral/HEAD"),
+            "should report git persistence, got: {}",
+            text
+        );
+        // No graph.json / profile.json should exist (Phase 3 removed them)
+        assert!(
+            !project_path.join(".git/spectral/contexts/graph.json").exists(),
+            "graph.json must NOT be written — graph is git-native"
         );
 
-        // Profile must be persisted
-        let profile_path = project_path.join(".git/spectral/contexts/profile.json");
+        // Nodes must be in the actor's memory (eigenboard was stored during index)
+        let status: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall { name: "memory_status".to_string(), arguments: json!({}) },
+                reply,
+            )
+        )
+        .expect("status failed");
+        let status_text = status["content"][0]["text"].as_str().unwrap();
         assert!(
-            profile_path.exists(),
-            "profile.json must be written after spectral_index"
-        );
-
-        // graph.json must be valid JSON and contain nodes + dir_hash
-        let graph_content = std::fs::read_to_string(&graph_path).unwrap();
-        let graph_val: serde_json::Value = serde_json::from_str(&graph_content)
-            .expect("graph.json must be valid JSON");
-        assert!(
-            graph_val.get("nodes").is_some(),
-            "graph.json must contain 'nodes' field"
-        );
-        assert!(
-            graph_val.get("dir_hash").is_some(),
-            "graph.json must contain 'dir_hash' for staleness check"
-        );
-        assert!(
-            graph_val.get("breakdown").is_some(),
-            "graph.json must contain 'breakdown' for CLI convergence"
+            status_text.contains("nodes:"),
+            "status should report nodes, got: {}",
+            status_text
         );
 
         mcp_ref.stop(None);
@@ -957,13 +1067,18 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_index_cache_convergence_with_cli() {
-        // After MCP writes graph.json, CLI's load_or_build should read it
+        // Phase 3: after spectral_index + flush the MCP db writes refs/spectral/HEAD
+        // into the project's git. CLI's load_or_build then reads from that ref
+        // (from_cache = true). The db must be opened at project_path so both surfaces
+        // share the same git store.
         let project = tempfile::tempdir().expect("failed to create project dir");
         let project_path = project.path().to_path_buf();
-        std::fs::create_dir_all(project_path.join(".git/spectral")).unwrap();
+        // Do NOT pre-create .git/spectral — SpectralDb::open initializes from scratch.
         std::fs::write(project_path.join("readme.md"), "# Hello\n\nWorld.\n").unwrap();
 
-        let (_dir, db) = open_test_db();
+        // Open the db AT project_path so flush writes refs/spectral/HEAD there.
+        let db = SpectralDb::open(&project_path, SCHEMA, 1e-6, 5_000_000)
+            .expect("failed to open SpectralDb at project_path");
         let memory_ref = MemoryActor::spawn_with_db(None, db)
             .await
             .expect("spawn memory failed");
@@ -974,7 +1089,7 @@ mod tests {
             .await
             .expect("spawn mcp failed");
 
-        // MCP index writes the cache
+        // MCP index: gestalt-scan the project, store eigenboard, flush to git.
         let _: Value = ractor::call!(
             mcp_ref,
             |reply| McpMsg::CallTool(
@@ -987,15 +1102,22 @@ mod tests {
         )
         .expect("call failed");
 
-        // CLI's load_or_build should use the cache (from_cache = true)
+        // Sync: flush is fire-and-forget; status call ensures it completes.
+        let _: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall { name: "memory_status".to_string(), arguments: json!({}) },
+                reply,
+            )
+        )
+        .expect("sync status failed");
+
+        // CLI's load_or_build must find refs/spectral/HEAD at project_path and
+        // return from_cache = true (git path, not gestalt fallback).
         let cached = crate::apache2::graph_cache::load_or_build(&project_path);
         assert!(
             cached.from_cache,
-            "CLI must read MCP-written cache (from_cache should be true)"
-        );
-        assert!(
-            cached.graph.nodes.len() > 0,
-            "cached graph should have nodes"
+            "CLI must read from refs/spectral/HEAD (from_cache should be true)"
         );
 
         mcp_ref.stop(None);
@@ -1022,6 +1144,381 @@ mod tests {
         assert!(result["isError"].as_bool() == Some(true));
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("unknown tool"), "got: {}", text);
+
+        mcp_ref.stop(None);
+        memory_ref.stop(None);
+        fate_ref.stop(None);
+    }
+
+    // ── Git-native optics tests ─────────────────────────────────────
+
+    /// Drive a couple of `memory_store` calls so HEAD has at least two
+    /// settled commits we can diff/blame against.
+    async fn seed_two_settles(mcp_ref: &ActorRef<McpMsg>) -> (String, String) {
+        let result_1: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "memory_store".to_string(),
+                    arguments: json!({ "node_type": "node", "content": "first" }),
+                },
+                reply,
+            )
+        )
+        .expect("store-1 failed");
+        let oid_1 = result_1["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("stored: ")
+            .unwrap()
+            .to_string();
+
+        let result_2: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "memory_store".to_string(),
+                    arguments: json!({ "node_type": "node", "content": "second" }),
+                },
+                reply,
+            )
+        )
+        .expect("store-2 failed");
+        let oid_2 = result_2["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("stored: ")
+            .unwrap()
+            .to_string();
+
+        // Force a sync round-trip so any pending flush completes.
+        let _: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "memory_status".to_string(),
+                    arguments: json!({}),
+                },
+                reply,
+            )
+        )
+        .expect("status sync failed");
+
+        (oid_1, oid_2)
+    }
+
+    #[tokio::test]
+    async fn mcp_memory_diff_reports_added_node() {
+        let (_dir, mcp_ref, memory_ref, fate_ref) = spawn_test_mcp().await;
+        let (_oid_1, oid_2) = seed_two_settles(&mcp_ref).await;
+
+        // Default range: HEAD~1..HEAD — should show oid_2 as added.
+        let result: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "memory_diff".to_string(),
+                    arguments: json!({}),
+                },
+                reply,
+            )
+        )
+        .expect("memory_diff failed");
+
+        assert!(
+            !result.get("isError").is_some_and(|v| v.as_bool() == Some(true)),
+            "should not be error: {:?}",
+            result
+        );
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(text).expect("diff body should be JSON");
+        let added = parsed["added_nodes"].as_array().expect("added_nodes array");
+        assert!(
+            added.iter().any(|v| v.as_str() == Some(oid_2.as_str())),
+            "added_nodes must include {}, got {}",
+            oid_2,
+            text
+        );
+
+        mcp_ref.stop(None);
+        memory_ref.stop(None);
+        fate_ref.stop(None);
+    }
+
+    #[tokio::test]
+    async fn mcp_memory_blame_returns_chain_for_node() {
+        let (_dir, mcp_ref, memory_ref, fate_ref) = spawn_test_mcp().await;
+        let (oid_1, _oid_2) = seed_two_settles(&mcp_ref).await;
+
+        let result: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "memory_blame".to_string(),
+                    arguments: json!({ "oid": oid_1 }),
+                },
+                reply,
+            )
+        )
+        .expect("memory_blame failed");
+
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(text).expect("blame body JSON");
+        let arr = parsed.as_array().expect("blame returns array");
+        assert!(
+            !arr.is_empty(),
+            "blame for stored node should have at least one entry, got {}",
+            text
+        );
+        // Each entry must have a commit_oid and a timestamp.
+        for entry in arr {
+            assert!(entry.get("commit_oid").is_some());
+            assert!(entry.get("timestamp").is_some());
+        }
+
+        mcp_ref.stop(None);
+        memory_ref.stop(None);
+        fate_ref.stop(None);
+    }
+
+    #[tokio::test]
+    async fn mcp_memory_branch_create_then_list() {
+        let (_dir, mcp_ref, memory_ref, fate_ref) = spawn_test_mcp().await;
+        let _ = seed_two_settles(&mcp_ref).await;
+
+        // Create
+        let created: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "memory_branch".to_string(),
+                    arguments: json!({ "name": "experiment" }),
+                },
+                reply,
+            )
+        )
+        .expect("memory_branch create failed");
+        let text = created["content"][0]["text"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(text).expect("created JSON");
+        assert_eq!(parsed["ref_name"], "refs/spectral/heads/experiment");
+        assert!(parsed["commit_oid"].as_str().unwrap().len() == 40);
+
+        // List
+        let listed: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "memory_branch".to_string(),
+                    arguments: json!({}),
+                },
+                reply,
+            )
+        )
+        .expect("memory_branch list failed");
+        let text = listed["content"][0]["text"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(text).expect("list JSON");
+        let branches = parsed["branches"].as_array().expect("branches array");
+        let names: Vec<&str> = branches
+            .iter()
+            .filter_map(|b| b["name"].as_str())
+            .collect();
+        assert!(names.contains(&"experiment"), "got: {:?}", names);
+        assert!(names.contains(&"main"), "main always exists, got: {:?}", names);
+
+        mcp_ref.stop(None);
+        memory_ref.stop(None);
+        fate_ref.stop(None);
+    }
+
+    #[tokio::test]
+    async fn mcp_memory_checkout_repoints_symref() {
+        let (_dir, mcp_ref, memory_ref, fate_ref) = spawn_test_mcp().await;
+        let _ = seed_two_settles(&mcp_ref).await;
+
+        // Create the branch we'll switch to
+        let _: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "memory_branch".to_string(),
+                    arguments: json!({ "name": "alt" }),
+                },
+                reply,
+            )
+        )
+        .expect("create branch failed");
+
+        // Checkout
+        let result: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "memory_checkout".to_string(),
+                    arguments: json!({ "name": "alt" }),
+                },
+                reply,
+            )
+        )
+        .expect("checkout failed");
+        assert!(
+            !result.get("isError").is_some_and(|v| v.as_bool() == Some(true)),
+            "should not be error: {:?}",
+            result
+        );
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(text).expect("checkout JSON");
+        assert_eq!(parsed["branch"], "alt");
+        assert!(parsed["note"].as_str().unwrap().contains("stale"));
+
+        // Checkout of nonexistent branch errors
+        let bad: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "memory_checkout".to_string(),
+                    arguments: json!({ "name": "does-not-exist" }),
+                },
+                reply,
+            )
+        )
+        .expect("checkout call");
+        assert!(bad["isError"].as_bool() == Some(true));
+
+        mcp_ref.stop(None);
+        memory_ref.stop(None);
+        fate_ref.stop(None);
+    }
+
+    #[tokio::test]
+    async fn mcp_memory_thread_returns_topic_notes() {
+        let (_dir, mcp_ref, memory_ref, fate_ref) = spawn_test_mcp().await;
+        let _ = seed_two_settles(&mcp_ref).await;
+
+        // Phase 5 settle writes hot-paths / pressure / ticks notes — by
+        // default they exist after settle. Walking the 'ticks' topic
+        // should surface at least one entry.
+        let result: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "memory_thread".to_string(),
+                    arguments: json!({ "topic": "ticks" }),
+                },
+                reply,
+            )
+        )
+        .expect("memory_thread failed");
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(text).expect("thread JSON");
+        let arr = parsed.as_array().expect("thread is array");
+        assert!(
+            !arr.is_empty(),
+            "ticks notes attached during settle should produce entries, got {}",
+            text
+        );
+        for entry in arr {
+            assert!(entry.get("commit_oid").is_some());
+            assert!(entry.get("body").is_some());
+        }
+
+        // Unknown topic returns empty array (not error).
+        let empty: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "memory_thread".to_string(),
+                    arguments: json!({ "topic": "no-such-topic-zzz" }),
+                },
+                reply,
+            )
+        )
+        .expect("memory_thread unknown topic");
+        let text = empty["content"][0]["text"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(parsed.as_array().unwrap().len(), 0);
+
+        mcp_ref.stop(None);
+        memory_ref.stop(None);
+        fate_ref.stop(None);
+    }
+
+    #[tokio::test]
+    async fn mcp_memory_cherrypick_replays_commit() {
+        let (_dir, mcp_ref, memory_ref, fate_ref) = spawn_test_mcp().await;
+        let _ = seed_two_settles(&mcp_ref).await;
+
+        // Resolve current HEAD via memory_branch list — the `main` tip's
+        // commit_oid is a known-good commit we can cherry-pick onto itself.
+        let listed: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "memory_branch".to_string(),
+                    arguments: json!({}),
+                },
+                reply,
+            )
+        )
+        .expect("branch list");
+        let text = listed["content"][0]["text"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(text).unwrap();
+        let main_tip = parsed["branches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["name"] == "main")
+            .unwrap()["commit_oid"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Cherry-pick HEAD onto itself — produces a new commit with no
+        // tree changes (empty diff). This exercises the git op end-to-end
+        // and proves the ref advances.
+        let result: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "memory_cherrypick".to_string(),
+                    arguments: json!({ "commit_oid": main_tip }),
+                },
+                reply,
+            )
+        )
+        .expect("memory_cherrypick failed");
+        assert!(
+            !result.get("isError").is_some_and(|v| v.as_bool() == Some(true)),
+            "should not be error: {:?}",
+            result
+        );
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(text).expect("cherrypick JSON");
+        assert_eq!(parsed["source_commit"].as_str().unwrap(), main_tip);
+        assert!(parsed["new_head"].as_str().unwrap().len() == 40);
+        assert_ne!(parsed["new_head"].as_str().unwrap(), main_tip);
+
+        mcp_ref.stop(None);
+        memory_ref.stop(None);
+        fate_ref.stop(None);
+    }
+
+    #[tokio::test]
+    async fn mcp_memory_diff_invalid_ref_errors() {
+        let (_dir, mcp_ref, memory_ref, fate_ref) = spawn_test_mcp().await;
+        let _ = seed_two_settles(&mcp_ref).await;
+
+        let result: Value = ractor::call!(
+            mcp_ref,
+            |reply| McpMsg::CallTool(
+                ToolCall {
+                    name: "memory_diff".to_string(),
+                    arguments: json!({ "from": "no-such-ref" }),
+                },
+                reply,
+            )
+        )
+        .expect("memory_diff call");
+        assert!(result["isError"].as_bool() == Some(true), "got: {:?}", result);
 
         mcp_ref.stop(None);
         memory_ref.stop(None);

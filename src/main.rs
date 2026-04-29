@@ -78,11 +78,18 @@ fn main() {
 
     let json_flag = args.iter().any(|a| a == "--json");
 
+    // First non-flag positional arg after the subcommand, or "." default.
+    // Without this, `spectral status --json` would treat `--json` as the path.
+    let positional_path = args[2..]
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .map(|s| s.as_str())
+        .unwrap_or(".");
+
     match args[1].as_str() {
         // Optic subcommands — typed by optic, zero inference cost
         "status" => {
-            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
-            let view = spectral::apache2::views::StatusView::from_session(Path::new(path));
+            let view = spectral::apache2::views::StatusView::from_session(Path::new(positional_path));
             if json_flag {
                 println!("{}", serde_json::to_string_pretty(&view).unwrap());
             } else {
@@ -91,8 +98,7 @@ fn main() {
         }
 
         "savings" => {
-            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
-            let view = spectral::apache2::views::SavingsView::from_session(Path::new(path));
+            let view = spectral::apache2::views::SavingsView::from_session(Path::new(positional_path));
             if json_flag {
                 println!("{}", serde_json::to_string_pretty(&view).unwrap());
             } else {
@@ -101,8 +107,7 @@ fn main() {
         }
 
         "loss" => {
-            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
-            let view = spectral::apache2::views::LossView::from_session(Path::new(path));
+            let view = spectral::apache2::views::LossView::from_session(Path::new(positional_path));
             if json_flag {
                 println!("{}", serde_json::to_string_pretty(&view).unwrap());
             } else {
@@ -111,8 +116,7 @@ fn main() {
         }
 
         "peers" => {
-            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
-            let view = spectral::apache2::views::PeersView::from_session(Path::new(path));
+            let view = spectral::apache2::views::PeersView::from_session(Path::new(positional_path));
             if json_flag {
                 println!("{}", serde_json::to_string_pretty(&view).unwrap());
             } else {
@@ -121,8 +125,7 @@ fn main() {
         }
 
         "crystal" => {
-            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
-            let view = spectral::apache2::views::CrystalView::from_session(Path::new(path));
+            let view = spectral::apache2::views::CrystalView::from_session(Path::new(positional_path));
             if json_flag {
                 println!("{}", serde_json::to_string_pretty(&view).unwrap());
             } else {
@@ -131,8 +134,7 @@ fn main() {
         }
 
         "benchmark" => {
-            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
-            let view = spectral::apache2::views::BenchmarkView::from_session(Path::new(path));
+            let view = spectral::apache2::views::BenchmarkView::from_session(Path::new(positional_path));
             if json_flag {
                 println!("{}", serde_json::to_string_pretty(&view).unwrap());
             } else {
