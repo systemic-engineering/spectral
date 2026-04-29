@@ -30,6 +30,7 @@ pub mod eigenvalue;
 pub mod encode;
 pub mod form;
 pub mod graph;
+pub mod mirror_domain;
 pub mod panel;
 pub mod semantic;
 pub mod spectral;
