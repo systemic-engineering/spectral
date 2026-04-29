@@ -150,7 +150,7 @@ impl Domain for Document {
     type Language = DocumentKind;
 
     fn id() -> &'static str {
-        "document"
+        "@gestalt/document"
     }
 
     fn local_name(kind: &DocumentKind) -> Cow<'static, str> {
