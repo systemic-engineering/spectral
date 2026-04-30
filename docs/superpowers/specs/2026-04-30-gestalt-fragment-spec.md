@@ -479,9 +479,70 @@ The Fate tournament is the mechanism for traversal. Five models, 425 parameters,
 deterministic. The 16x16 eigenvalue topography is the terrain. The models navigate it.
 The winner's path is the query result.
 
-The LLM is the mechanism for extension. It runs when traversal fails — when the query
-asks about structure that doesn't exist. The LLM output becomes structure. Structure
-becomes traversable. The LLM never runs the same query twice.
+The LLM is the mechanism for extension. It runs when the compiler hits a boundary —
+when something cannot be parsed. The LLM output is not an answer. It is a grammar.
+Structure becomes traversable. The compiler never hits the same boundary twice.
+
+### Grammar gap closure: the inference cascade
+
+The signal for LLM inference is structural, not intentional. It fires when the
+compiler encounters the boundary of the graph's knowledge — something it cannot parse.
+Not "the user asked a question." "The parser returned nothing."
+
+When that happens, spectral runs this cascade in order:
+
+**1. Infer possible grammars.**
+What grammars are adjacent to the unparseable structure? What does the Fragment tree
+know about this region? The compiler produces candidate grammar shapes from context.
+
+**2. Check the garden.**
+The garden is the commons — `visibility/protected` graph, shared across users. Check
+for grammars that match the candidates. Fetch them. Measure loss against the
+unparseable input. Keep improvements. Compose if multiple partial matches reduce loss
+together. This is the Fate tournament applied to grammar candidates: multiple grammars
+compete, the one (or composition) that minimizes loss wins.
+
+**3. Check the LSP on cache miss.**
+The editor's language server already knows things spectral doesn't — type signatures,
+symbol resolution, imported modules. If the garden miss is clean, ask the LSP: "can
+you infer a grammar for this?" The LSP is cheaper than an LLM and has local type
+context. This step is free on languages with rich LSP support.
+
+**4. Check with the user if uncertain.**
+No grammars found. LSP returned nothing useful. Spectral surfaces the gap explicitly:
+"I cannot parse this. Here is what I know about the boundary. Do you want to close
+it?" The user sees the measurement gap, not an error message. Explicit consent gate
+before any LLM is involved.
+
+**5. Spawn an LLM agent for the gap — after user consent.**
+Not to do the dark work. To close the gap in the grammars. The LLM receives the
+unparseable input, the Fragment tree context, and the adjacent grammars. It produces
+a grammar file. That grammar file enters spectral's knowledge. The boundary moves.
+The same input is parseable on the next run without LLM.
+
+The LLM never writes code on your behalf. It writes structure — grammar — that the
+compiler can use deterministically from that point forward. This is the distinction
+that matters.
+
+### Visibility and consent in grammar gap closure
+
+Two paths for step 5, both available, user chooses:
+
+**Via the garden (commons, no compute cost):**
+The grammar gap closure request goes to `visibility/protected`. The resulting grammar
+becomes part of the commons. Other users facing the same boundary find it in the
+garden during step 2. You pay nothing. The community absorbs the cost. Your gap
+closure contributes to everyone's convergence. `e^{n+1} < e^n` at the community
+level.
+
+**Via spectral + OpenRouter (local, private):**
+The grammar gap closure runs locally via OpenRouter. The resulting grammar stays at
+`visibility/private`. You pay the compute cost. No one else sees the grammar. You own
+it. Appropriate for proprietary domains or knowledge you haven't chosen to share.
+
+The visibility model maps directly to the consent architecture already in place.
+Protected is the default for things worth sharing. Private is for things not yet
+ready, or never intended, for the commons.
 
 ### The stack collapses
 
