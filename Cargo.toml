@@ -30,6 +30,11 @@ path = "src/main.rs"
 
 [features]
 default = []
+# Opt-in for tests that depend on the `lens` crate (currently disabled
+# pending re-integration — see tests/agent_memory.rs and
+# tests/apache2_standalone.rs). Enable with `--features lens-integration`
+# once `lens` compiles again on the spectral-db side.
+lens-integration = []
 sel = ["dep:rustyline", "dep:colored", "dep:reqwest", "dep:tokio", "dep:ractor", "dep:fate", "dep:spectral-db", "dep:tower-lsp", "dep:dashmap", "dep:ratatui", "dep:crossterm", "dep:image", "dep:spectral-ui"]
 
 [dependencies]
@@ -40,6 +45,7 @@ clap = { version = "4", features = ["derive"] }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 terni = { path = "../prism/imperfect" }
+git2 = "0.19"
 
 # sel-gated dependencies
 rustyline = { version = "14", optional = true }
