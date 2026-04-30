@@ -427,6 +427,32 @@ These are the same computations cascade does today. The difference is when they 
 (on demand, not on timer) and how they're stored (as cached lens results, not as
 graph nodes that trigger dirty-marking).
 
+### NL compiled into the binary
+
+All NL processing lives in the binary. Compiled. Offline. No API call. No model
+download. No network dependency.
+
+The substrate is a small eigenvalue-based model trained on the language of your
+graph and the `@nl/*` grammars. Not a general language model — a domain model. It
+knows your vocabulary because your vocabulary is its training data. Every concept
+you've crystallized, every observation you've stored, every grammar action you've
+named — that's the corpus. The model is personalized by construction, not by
+fine-tuning.
+
+```
+@nl/surface    <- intent parsing: find, near, hot, where, sort, limit
+@nl/stems      <- UAX#29 → stop filter → Porter2 → compound decomposition
+@nl/vocabulary <- spectral's known terms: node types, field names, operators
+@nl/resolve    <- stem OIDs → graph addresses → pipe-forward query
+```
+
+The `@nl/*` grammars are compiled into spectral the same way `@db/*` grammars are.
+`scan_grammars()` picks them up. The NL pipeline is vocabulary, not inference.
+
+The result: the editor IS the model. Not "the editor has a model." The Fragment tree
+is the weights. The eigenvalue topography of your actual codebase, your actual
+concepts, your actual language — that is the substrate NL runs on.
+
 ### NL/LLM division
 
 Two operations. Hard boundary.
@@ -434,11 +460,11 @@ Two operations. Hard boundary.
 **Traversal**: anything the graph already contains.
 
 ```
-user query -> mirror NL tokenizer -> stem OIDs -> graph query -> result
+user query -> @nl/stems -> stem OIDs -> @nl/resolve -> graph query -> result
 ```
 
-No LLM. The NL tokenizer produces stems. Stems are OIDs. OIDs are graph addresses.
-The query is a walk over existing structure. This is deterministic, fast, and cheap.
+No LLM. Deterministic, fast, offline. Sub-millisecond. Reproducible — same query,
+same graph state, same result.
 
 **Extension**: new structure that doesn't exist yet.
 
@@ -456,6 +482,85 @@ The winner's path is the query result.
 The LLM is the mechanism for extension. It runs when traversal fails — when the query
 asks about structure that doesn't exist. The LLM output becomes structure. Structure
 becomes traversable. The LLM never runs the same query twice.
+
+### The stack collapses
+
+MCP, LSP, and the spectral binary are not three layers. They are one Fragment tree
+with three rendering targets.
+
+```
+MCP tools          <- thin routing. Names lenses. Routes to graph_query. That's all.
+LSP server         <- Fragment tree cursor. Position = OID. Hover = zoom.
+spectral binary    <- Fragment tree. The source of truth.
+```
+
+The LSP protocol is already the five operations spelled in JSON-RPC:
+- `textDocument/hover` is `zoom with summary |> refract as markdown`
+- `textDocument/references` is `split by reference |> project where oid = this`
+- `textDocument/completion` is `nl::tokenize(prefix) |> eigenvalue_route |> refract as completion-items`
+- `textDocument/definition` is `focus by oid |> refract as location`
+
+The LSP server stops being a separate implementation that happens to answer editor
+queries. It becomes a Fragment tree cursor that emits LSP-shaped responses. The
+protocol is a rendering target — like `refract as markdown` but `refract as lsp-json`.
+
+The MCP becomes what it always should have been: a thin envelope. `memory_gestalt`
+with a named lens map is `graph_query |> zoom |> refract as mcp-json`. The 14
+individual memory tools are sugar over one operation.
+
+One tree. The editor, the terminal, the LLM context, and the MCP client are all
+projections of it. A change in any surface propagates immediately to all of them
+because there is only one tree.
+
+### `@db/*`: the competitive landscape as vocabulary
+
+Every memory primitive that competitors sell as infrastructure becomes a lens.
+
+```
+@db/temporal    <- time-travel: find observation |> where valid_at < T
+@db/entity      <- entity graph: find fragment |> where entity = X |> walk edges
+@db/summary     <- compression: find observation |> near session_oid |> zoom with crystallize
+@db/vector      <- semantic proximity: thin wrapper over eigenvalue distance +
+                   embedding API fallback for cross-domain conceptual queries
+@db/working     <- session-scoped scratch: find fragment |> where session = current
+@db/procedural  <- crystallized patterns: find crystal |> where kind = how-to
+@db/episodic    <- event sequences: find observation |> sort by timestamp |> walk next
+```
+
+Seven `.mirror` files. Seven `scan_grammars()` registrations. Seven MCP tools.
+
+`@db/vector` is the thin case. Eigenvalue distance handles structural/lexical
+similarity — same codebase, same vocabulary, same stems. The gap is cross-domain
+conceptual proximity: "Fiedler vector" and "algebraic connectivity" share meaning
+but share no stems. That gap is `@db/vector` calling an embedding API as fallback,
+only when eigenvalue distance returns nothing above threshold. Fallback, not default.
+The `.vec` blob approach for storage.
+
+Because these are lenses over one Fragment tree rather than separate systems, they
+compose. `@db/temporal |> @db/entity` — "what did we know about Alex at T?" — is
+one pipe-forward query. In Zep + Mem0 that's two API calls with schema mismatch.
+
+The competitors built the features without the substrate. The Fragment tree is the
+substrate. Their product surface is vocabulary.
+
+### `@memory/*`: spectral's own memory grammar
+
+`@db/*` is the compatibility layer — lenses that cover what competitors offer.
+`@memory/*` is spectral's native memory domain:
+
+```
+@memory/observation   <- what was noticed
+@memory/crystal       <- what settled
+@memory/gap           <- what's missing
+@memory/edge          <- how things connect
+@memory/eigenboard    <- current spectral state (Fiedler, lambda[], updated_at)
+@memory/session       <- session-scoped context
+```
+
+These already exist as `@gestalt/memory` types. The `@memory/*` namespace makes the
+domain first-class and separates spectral's own memory model from the compatibility
+lenses. `@gestalt/memory` stays as the grammar-level declaration. `@memory/*`
+exposes it as a queryable lens namespace at the CLI and MCP level.
 
 ### Context streaming
 
@@ -499,7 +604,7 @@ The transition from AST-shape to type-graph is specced but not started.
 
 Milestone-level. Not task-level.
 
-### Milestone 1: Mirror cleanup
+### Milestone 1: Mirror cleanup + eigentests on the right graph
 
 The cleanup review documents the state. 14 dead branches to delete. 3 broken test
 files to fix. 636 uncommitted lines on `glint/observation-grammar` to either commit
@@ -508,6 +613,18 @@ untracked, unwired Rust in the working tree.
 
 This is not glamorous work. It's the work that makes the next milestone possible.
 You can't build Fragment<D> on a codebase with dead branches and broken tests.
+
+The eigentest fix is part of this milestone, not a future one. Currently the battery
+runs on AST parse trees, which are inherently hierarchical — the test correctly
+detects star topology but applies it to a graph that is structurally star-shaped by
+construction. This produces correct mechanics on the wrong substrate.
+
+The fix: run eigentests on the cross-reference type graph. Type-to-type edges, not
+parent-child AST edges. A grammar where one type mediates all connections IS a star
+and SHOULD fail. A grammar where types reference each other densely SHOULD pass. The
+same eight tests, different input graph. This is Milestone 1 because it makes the
+eigentest semantically valid — a prerequisite for using it as a structural guarantee
+in Fragment<D> validation.
 
 ### Milestone 2: Fragment<D> derivation from Node<D>
 
